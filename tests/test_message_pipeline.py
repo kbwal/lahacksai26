@@ -151,7 +151,7 @@ def test_backoff_is_durable_and_does_not_consume_another_page(store):
 def test_invalid_cursor_restarts_without_discarding_cache(store):
     store.save_page(KEY, "C1", 0, [message()], {"page": 9})
     status = sync_once(store, Client([ProviderError("invalid_cursor")]), KEY)
-    assert status["channels"][0]["last_error"] == "ProviderError"
+    assert status["channels"][0]["last_error"] == "invalid_cursor"
     assert store.channels(KEY)[0]["cursor"] is None
     assert store.status(KEY)["messages"] == 1
 
@@ -273,6 +273,21 @@ def test_discord_message_ids_threads_auth_and_pagination():
     assert messages[0].reply_to_id == "100"
     assert session.headers["Authorization"] == "Bot secret"
     assert client.page("7", "99", "88", state) == ([], None)
+
+
+def test_completed_channel_without_cached_messages_resumes_from_scan_start(store):
+    seen = []
+
+    class Recording(Client):
+        def initial_state(self, since_ms=None):
+            seen.append(since_ms)
+            return {"page": 1}
+
+    before = time.time_ns() // 1_000_000
+    sync_once(store, Recording([([], None)]), KEY)  # Completes with nothing cached.
+    sync_once(store, Recording([([], None)]), KEY)
+    assert seen[0] is None
+    assert seen[1] >= before - 60_000 and seen[1] > 0
 
 
 def test_discord_rejects_cross_server_channels_and_missing_intent():
@@ -551,7 +566,7 @@ def test_failing_channel_does_not_block_others_or_reconciliation(store, stage):
 
     status = sync_once(store, PartialClient([]), KEY)
     assert status["last_error"] is None
-    assert [row["last_error"] for row in status["channels"]] == ["ProviderError", None]
+    assert [row["last_error"] for row in status["channels"]] == ["http_403", None]
     assert next(store.suggestions(KEY))["state"] == "replied"
     sync_once(store, Client([([], None), ([incoming, reply], None)]), KEY)
     assert all(row["last_error"] is None for row in store.status(KEY)["channels"])
@@ -581,8 +596,10 @@ def test_older_database_migrates_channel_state_without_losing_cursors(tmp_path):
     from message_pipeline.store import SCHEMA
 
     path = tmp_path / "old.db"
-    legacy = SCHEMA.replace("    selected INTEGER NOT NULL DEFAULT 1,\n", "").replace(
-        "    last_complete_at REAL,\n    last_error TEXT,", "    last_complete_at REAL,"
+    legacy = (
+        SCHEMA.replace("    selected INTEGER NOT NULL DEFAULT 1,\n", "")
+        .replace("    scan_started_ms INTEGER,\n", "")
+        .replace("    last_complete_at REAL,\n    last_error TEXT,", "    last_complete_at REAL,")
     )
     with sqlite3.connect(path) as db:
         db.executescript(legacy)
@@ -593,6 +610,7 @@ def test_older_database_migrates_channel_state_without_losing_cursors(tmp_path):
         try:
             row = migrated.channels(KEY)[0]
             assert row["selected"] == 1 and row["last_error"] is None
+            assert row["scan_started_ms"] is None
             assert row["generation"] == 2 and json.loads(row["cursor"]) == {"page": 2}
         finally:
             migrated.close()
@@ -614,6 +632,38 @@ def test_failing_conversation_does_not_block_later_suggestions(store):
     assert result["generated"] == 1 and result["failed"] == 1
     assert [row["state"] for row in store.suggestions(KEY)] == ["failed", "ready"]
     assert generate_suggestions(store, KEY, Generator(), include_history=True)["generated"] == 1
+
+
+def test_failed_attempts_count_toward_limit_and_retry_after_new_work(store):
+    store.save_page(
+        KEY,
+        "C1",
+        1,
+        [
+            message(is_self=False, thread_id=f"bad{i}", message_id=f"bad{i}", timestamp_ms=30 + i)
+            for i in range(2)
+        ],
+        None,
+    )
+
+    class Failing(Generator):
+        def generate(self, context):
+            super().generate(context)
+            if context["thread_id"].startswith("bad"):
+                raise ValueError("synthetic generation failure")
+            return "A suggested reply"
+
+    generator = Failing()
+    with pytest.raises(ValueError):
+        generate_suggestions(store, KEY, generator, include_history=True, limit=2)
+    assert len(generator.contexts) == 2  # Failures use the budget too.
+    # A new conversation is tried before conversations that already failed unchanged.
+    store.save_page(KEY, "C1", 1, [message(is_self=False, thread_id="new", message_id="new", timestamp_ms=1)], None)
+    generator.contexts.clear()
+    result = generate_suggestions(store, KEY, generator, include_history=True, limit=2)
+    assert result == {"source": "slack", "generated": 1, "failed": 1}
+    # "new" is older than both failures but goes first; one retry fits the rest of the budget.
+    assert [context["thread_id"] for context in generator.contexts] == ["new", "bad1"]
 
 
 def test_total_generation_failure_still_surfaces_after_trying_all_threads(store):

@@ -7,14 +7,22 @@ from gmail_agent.locking import worker_lock
 from message_pipeline.clients import ProviderError, RateLimited
 from message_pipeline.replies import reconcile
 
+# Margin for a local clock ahead of the provider's when resuming from a scan's start time.
+CLOCK_SKEW_MS = 60_000
+
 
 def sync_channel(store, client, key, channel, max_pages):
     channel_id = channel["channel_id"]
     client.validate_channel(channel_id, key[2])
     since_ms = None
     if channel["last_complete_at"] is not None:
-        since_ms = store.newest_timestamp(key, channel_id) or 0
-    row = store.begin(key, channel_id, client.initial_state(since_ms))
+        since_ms = store.newest_timestamp(key, channel_id)
+        if since_ms is None and channel["scan_started_ms"] is not None:
+            # Nothing cached (e.g. only skipped message types): the last completed scan
+            # still covered everything before it started.
+            since_ms = max(0, channel["scan_started_ms"] - CLOCK_SKEW_MS)
+    started_ms = time.time_ns() // 1_000_000
+    row = store.begin(key, channel_id, client.initial_state(since_ms), started_ms)
     state = json.loads(row["cursor"])
     for _ in range(max_pages):
         messages, next_state = client.page(key[1], key[2], channel_id, state)
@@ -47,10 +55,9 @@ def sync_once(store, client, key, *, max_pages=100, credential_check=None):
                 except RateLimited:
                     raise  # Backoff applies to this connection, not just the channel.
                 except (ProviderError, ValueError) as error:
-                    store.fail_channel(
-                        key, channel_id, type(error).__name__,
-                        restart=isinstance(error, ProviderError) and error.code == "invalid_cursor",
-                    )
+                    # Provider codes are a fixed, non-private set; they tell the app what to fix.
+                    code = getattr(error, "code", None) or type(error).__name__
+                    store.fail_channel(key, channel_id, code, restart=code == "invalid_cursor")
             with store.db:
                 reconcile(store, key)
                 store.db.execute(

@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS channels (
     last_complete_at REAL,
     selected INTEGER NOT NULL DEFAULT 1,
     last_error TEXT,
+    scan_started_ms INTEGER,
     PRIMARY KEY(source,account_id,workspace_id,channel_id),
     FOREIGN KEY(source,account_id,workspace_id)
         REFERENCES connections(source,account_id,workspace_id) ON DELETE CASCADE
@@ -88,7 +89,9 @@ class Store:
             self.db.execute("BEGIN IMMEDIATE")
             columns = {row["name"] for row in self.db.execute("PRAGMA table_info(channels)")}
             for name, definition in (
-                ("selected", "INTEGER NOT NULL DEFAULT 1"), ("last_error", "TEXT")
+                ("selected", "INTEGER NOT NULL DEFAULT 1"),
+                ("last_error", "TEXT"),
+                ("scan_started_ms", "INTEGER"),
             ):
                 if name not in columns:
                     self.db.execute(f"ALTER TABLE channels ADD COLUMN {name} {definition}")
@@ -148,13 +151,14 @@ class Store:
             (*key, channel_id),
         ).fetchone()[0]
 
-    def begin(self, key, channel_id, initial_state):
+    def begin(self, key, channel_id, initial_state, started_ms):
+        """Start a scan unless one is in progress; `started_ms` precedes its boundary."""
         scope = (*key, channel_id)
         with self.db:
             self.db.execute(
-                """UPDATE channels SET cursor=?,generation=generation+1 WHERE
+                """UPDATE channels SET cursor=?,generation=generation+1,scan_started_ms=? WHERE
                    source=? AND account_id=? AND workspace_id=? AND channel_id=? AND cursor IS NULL""",
-                (json.dumps(initial_state), *scope),
+                (json.dumps(initial_state), started_ms, *scope),
             )
         return self.db.execute(
             "SELECT * FROM channels WHERE source=? AND account_id=? AND workspace_id=? AND channel_id=?",

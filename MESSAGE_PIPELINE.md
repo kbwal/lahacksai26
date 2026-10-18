@@ -76,7 +76,9 @@ next cursor commit together. Replaying a page updates the same message instead o
 a duplicate. A process lock prevents concurrent sync/disconnect for the same connection.
 Status and exception output omit message text and tokens.
 Channel-local provider/validation failures appear in `status.channels[].last_error` and
-do not block other selected channels or their reply reconciliation. Identity, network and
+do not block other selected channels or their reply reconciliation. Provider failures
+record their code (for example `http_403` for lost access, `invalid_cursor` for a
+restarted scan); other validation failures record the exception type. Identity, network and
 rate-limit failures still apply to the connection. Automatic suggestions skip channels
 with a recorded sync failure until their next successful page.
 
@@ -91,6 +93,8 @@ Discord uses a frozen backward scan for its initial import, then reads forward w
 `after` from the newest cached message timestamp. Replaying the final millisecond avoids
 losing messages whose snowflakes share that timestamp; pending pages retain exact IDs.
 Once initial import finishes, cycles fetch new messages rather than rereading all history.
+A channel with nothing cached (for example only skipped system messages) resumes from its
+last completed scan's start time, less a one-minute clock-skew margin.
 Edits to older Discord messages are not refreshed by these incremental reads.
 
 This first version favors correctness for a small channel allowlist over high-volume
@@ -204,8 +208,9 @@ supersedes the earlier suggestion, and changed cached context regenerates machin
 The app must keep any human-edited composition separately rather than treating this
 machine suggestion store as an editable draft. Dismissal prevents regeneration for the
 same trigger. Source/channel/thread IDs accompany every suggestion.
-One failed generation is recorded and does not stop attempts for later conversations;
-failed rows retry next cycle. The result includes `generated` and `failed` counts. If all
+One failed generation is recorded and does not stop attempts for later conversations.
+`--draft-limit` caps attempts per cycle, failures included, and a conversation that failed
+with unchanged context is retried only after new conversations have been tried. The result includes `generated` and `failed` counts. If all
 attempts fail, the first error still surfaces. Suggestion generation fetches only the last
 three human messages per eligible conversation, and reconciliation queries only the latest
 human message and the first qualifying later reply.
@@ -250,7 +255,7 @@ Automated tests use synthetic provider responses for pagination, restart recover
 429 backoff, channel/account isolation, source labels, text edits and export permissions.
 Regression coverage includes isolated channel/model failures, disconnect shutdown, channel
 selection migration, incremental Discord cursor recovery, and bounded context reads.
-All 144 repository tests pass. The rebuilt, relocated macOS executable also generated
+All 146 repository tests pass. The rebuilt, relocated macOS executable also generated
 real local Qwen3.5-2B suggestions for synthetic Slack and Discord conversations, preserving
 the source label in each suggestion and its context.
 No live Slack workspace or Discord server has been connected or imported in this change.

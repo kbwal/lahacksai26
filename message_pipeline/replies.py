@@ -80,6 +80,7 @@ def generate_suggestions(
                    ORDER BY max(timestamp_ms) DESC""",
                 (*key, 0 if include_history else connection["activated_at_ms"]),
             ).fetchall()
+        fresh, retries = [], []
         for channel, thread in conversations:
             messages = human_messages(store, key, channel, thread)
             if not messages or messages[-1]["is_self"]:
@@ -101,6 +102,13 @@ def generate_suggestions(
                 and row["context"] == encoded
             ):
                 continue
+            # A failure with unchanged context is retried only after new work, so a
+            # conversation that always fails can't take the whole budget every cycle.
+            unchanged_failure = row and row["state"] == "failed" and row["context"] == encoded
+            (retries if unchanged_failure else fresh).append((scope, context, encoded))
+        for attempts, (scope, context, encoded) in enumerate(fresh + retries):
+            if attempts >= limit:
+                break  # Failures count too: each attempt can take seconds under the lock.
             with store.db:
                 # Only machine suggestions are stored here. User composition remains in
                 # the desktop app/provider; refresh a suggestion when cached context changes.
@@ -139,8 +147,6 @@ def generate_suggestions(
                 failed += 1
                 if first_error is None:
                     first_error = error
-            if generated >= limit:
-                break
     if first_error is not None and generated == 0:
         raise first_error
     return {"source": key[0], "generated": generated, "failed": failed}
