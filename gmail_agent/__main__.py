@@ -47,6 +47,10 @@ def parser():
     result.add_argument("--db", type=Path, default=paths["db"])
     result.add_argument("--account", help="Connected Gmail address; optional with one account")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("desktop-compose", help="Draft a new message locally from JSON on stdin")
+    commands.add_parser("desktop-accounts", help="List connected Gmail accounts for the app")
+    commands.add_parser("desktop-inbox", help="Fetch current app-owned Gmail drafts")
+    commands.add_parser("desktop-send", help="Send one reviewed draft from JSON on stdin")
     commands.add_parser(
         "messages", add_help=False,
         help="Slack/Discord ingestion and unified exports; use messages --help",
@@ -170,6 +174,16 @@ def main(argv=None):
     store = None
     client = None
     try:
+        if args.command == "desktop-compose":
+            from gmail_agent.compose import compose
+
+            raw = sys.stdin.read(20001)
+            if len(raw) > 20000:
+                raise ValueError("Compose request is too large")
+            with redirect_stdout(sys.stderr):
+                result = compose(json.loads(raw))
+            print(json.dumps(result))
+            return 0
         if args.command == "info":
             print(json.dumps(runtime.info(), indent=2))
             return 0
@@ -213,6 +227,9 @@ def main(argv=None):
                 store.add_account(email, email)
             print(json.dumps({"account": email, "connected": True}))
             return 0
+        if args.command == "desktop-accounts":
+            print(json.dumps([a["account_id"] for a in store.accounts()]))
+            return 0
         account_id = select_account(store, args.account)
         if args.command == "status":
             print(json.dumps(store.status(account_id), indent=2))
@@ -240,6 +257,18 @@ def main(argv=None):
         from gmail_agent.auth import client_for
 
         client = client_for(store.account(account_id)["credential_ref"])
+        if args.command in {"desktop-inbox", "desktop-send"}:
+            from gmail_agent.desktop import inbox, send
+
+            if args.command == "desktop-inbox":
+                result = inbox(store, client, account_id)
+            else:
+                payload = sys.stdin.read(100001)
+                if len(payload) > 100000:
+                    raise ValueError("Send request is too large")
+                result = send(store, client, account_id, json.loads(payload))
+            print(json.dumps(result))
+            return 0
         if args.command in {"backfill", "recover"}:
             with worker_lock(store.path, account_id):
                 if args.command == "backfill":
@@ -286,9 +315,18 @@ def main(argv=None):
         print(f"Error: {error}", file=sys.stderr)
         return 1
     except Exception as error:  # noqa: BLE001 -- redact provider exceptions at the CLI boundary
-        print(
-            f"Error: {type(error).__name__}. Check status and reconnect if needed.", file=sys.stderr
-        )
+        if args.command == "desktop-compose":
+            detail = (
+                f"Missing local model dependency: {error.name}"
+                if isinstance(error, ModuleNotFoundError)
+                else f"Local generation failed ({type(error).__name__}). Check your instruct model and try again."
+            )
+            print(f"Error: {detail}", file=sys.stderr)
+        else:
+            print(
+                f"Error: {type(error).__name__}. Check status and reconnect if needed.",
+                file=sys.stderr,
+            )
         return 1
     finally:
         if client is not None:

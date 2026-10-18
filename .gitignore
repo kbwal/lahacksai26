@@ -6,6 +6,14 @@ adapters/
 *.mbox
 .DS_Store
 models/
+
+# Desktop app: dependencies, builds, and local state
+desktop/node_modules/
+desktop/dist/
+desktop/release/
+desktop/*.tsbuildinfo
+desktop/test-results/
+desktop/.vite/
 .pytest_cache/
 .ruff_cache/
 client_secret*.json
