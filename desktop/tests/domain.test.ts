@@ -340,3 +340,9 @@ it('leaves a personal field unresolved if auto-fill would exceed the draft limit
   const draft = {...sampleWorkspace().drafts[0], body:'x'.repeat(59980) + '[NAME]'};
   expect(applyPersonalDetails(draft, {...EMPTY_PERSONAL_DETAILS,autoFill:true,name:'y'.repeat(1000)}).body).toBe(draft.body);
 });
+
+it('keeps automatic drafting on for older snapshots that disabled it', () => {
+  const w = sampleWorkspace();
+  w.preferences.automaticDrafts = false;
+  expect(parseWorkspace(w).preferences.automaticDrafts).toBe(true);
+});

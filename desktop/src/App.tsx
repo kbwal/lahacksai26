@@ -436,11 +436,9 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     </button>
                   <span className="automation-status">
                     <span
-                      className={`status-dot${state.preferences.automaticDrafts ? " on" : ""}`}
+                      className="status-dot on"
                     />
-                    {state.preferences.automaticDrafts
-                      ? "Automatic drafts on"
-                      : "Manual drafting"}
+                    Automatic drafts on
                   </span>
                   </div>
                 </div>
@@ -867,32 +865,6 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     </div>
                   </section>
                 )}
-                <h2 className="section-title">Drafting</h2>
-                <label className="option-row">
-                  <span>
-                    <h3>Automatic drafts</h3>
-                    <small>
-                      Only for messages the model predicts need a reply.
-                    </small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={state.preferences.automaticDrafts}
-                    onChange={(e) =>
-                      setState((s) => ({
-                        ...s,
-                        preferences: {
-                          ...s.preferences,
-                          automaticDrafts: e.target.checked,
-                        },
-                      }))
-                    }
-                  />
-                </label>
-                <p className="sub spaced">
-                  This preference is saved locally. “Draft in my voice” stays
-                  available through the app integration.
-                </p>
                 <h2 className="section-title">Workspace data</h2>
                 <p className="sub spaced">
                   {state.mode === "demo"

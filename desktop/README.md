@@ -32,7 +32,7 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 - Existing drafts remain visible after a role excludes their app.
 - Draft previews display the role, incoming context, text and unresolved placeholders.
 - Model placeholders open an accessible detail editor with a preview in the actual reply. `[DATE]`, `[TIME]`, `[AMOUNT]`, `[PHONE]`, `[ADDRESS]`, and `[LINK]` follow the types in the train branch’s `train/mask.py`; custom uppercase placeholders get a text editor. Each occurrence is filled independently, stays editable after reopening, and blocks sending until resolved. Existing literal details are preserved.
-- Settings persist automatic drafting. The older edit-learning field remains in snapshot version 1 for compatibility; its control has been removed.
+- Automatic drafting is always on; Settings has no off switch. Older snapshots with automatic drafting disabled are normalized to enabled. The older preference fields remain in snapshot version 1 for compatibility.
 - Roles, preferences and local draft changes persist across restarts. Native files are saved atomically, with the previous file retained as `workspace.json.bak`.
 - Draft buttons open supplied official app URLs, or the app's drafts/home page when no exact link exists.
 - JSON snapshots can be imported in Settings with structural validation and an explicit replacement confirmation.

@@ -484,7 +484,7 @@ export function parseWorkspace(input: unknown): Workspace {
     drafts,
     personalDetails,
     preferences: {
-      automaticDrafts: bool(prefs.automaticDrafts),
+      automaticDrafts: true,
       learnFromEdits: bool(prefs.learnFromEdits),
     },
   };
