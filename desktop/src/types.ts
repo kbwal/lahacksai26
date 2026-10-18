@@ -1,4 +1,22 @@
-export type AppId = "gmail" | "slack" | "outlook";
+export type AppId = "gmail" | "slack" | "discord" | "outlook";
+export type ChatSource = "slack" | "discord";
+export interface ChatConnection {
+  source: ChatSource;
+  account_id: string;
+  workspace_id: string;
+  retry_at: number;
+  last_error: string | null;
+  messages: number;
+  channels: { channel_id: string; selected: boolean; last_error: string | null;
+    scan_in_progress: boolean; last_complete_at: number | null }[];
+}
+export interface ChatInbox {
+  source: ChatSource;
+  accountId: string;
+  workspaceId: string;
+  status: ChatConnection;
+  drafts: Draft[];
+}
 export type Page = "drafts" | "roles" | "settings";
 export interface AppConnection {
   id: AppId;
@@ -25,6 +43,9 @@ export interface PlaceholderEdits {
 export interface Draft {
   id: string;
   appId: AppId;
+  source?: "gmail" | ChatSource;
+  chat?: { source: ChatSource; accountId: string; workspaceId: string; channelId: string;
+    threadId: string; suggestionId: number; stale: boolean };
   roleId: string;
   subject: string;
   recipient: string;
@@ -68,6 +89,9 @@ export interface TimeChoice {
 declare global {
   interface Window {
     margin?: {
+      chatConnections(source: ChatSource, choose?: boolean): Promise<ChatConnection[] | null>;
+      chatInbox(source: ChatSource, account: string, workspace: string): Promise<ChatInbox>;
+      syncChat(source: ChatSource, account: string, workspace: string): Promise<ChatInbox | null>;
       copyDraft(id: string): Promise<void>;
       composeMessage(request: { appId: AppId; personaId: string; prompt: string; recipient: string; subject: string; changeModel: boolean }): Promise<{body: string} | null>;
       gmailAccounts(): Promise<string[]>;

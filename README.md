@@ -24,6 +24,6 @@ npm run build       # Type-check and produce the renderer bundle
 npm run package     # Create a development Mac .app in release/
 ```
 
-The initial workspace uses clearly labeled sample data. Role editing, per-role app exceptions, preferences, draft browsing, and [TIME] insertion are implemented and saved locally. Gmail/Slack/Outlook authentication, live draft synchronization, automatic reply detection and training are integration work; the dashboard does not simulate those actions as real account operations.
+The initial workspace uses clearly labeled sample data. Gmail loads owned drafts from the local worker and supports reviewed sends. Slack and Discord load source-labelled reply suggestions from saved worker connections, with manual sync, local detail editing, and copy/open actions. First-time Slack/Discord setup still uses the [message pipeline CLI](MESSAGE_PIPELINE.md); OAuth onboarding and Outlook integration remain future work. Personas, preferences, and draft edits are saved locally.
 
 Python model development remains at the repository root (`uv sync`, `train/`). Model weights, user mail, adapters and desktop build artifacts are ignored by Git.

@@ -6,6 +6,7 @@ export function sampleWorkspace(): Workspace {
     connections: [
       { id: "gmail", name: "Gmail", connected: true },
       { id: "slack", name: "Slack", connected: true },
+      { id: "discord", name: "Discord", connected: true },
       { id: "outlook", name: "Outlook", connected: false },
     ],
     roles: [
@@ -87,6 +88,14 @@ export function sampleWorkspace(): Workspace {
         context: "we’re grabbing dinner later, want to join?",
         body: "yeah i’m in! send me the place when you pick one and i’ll meet you there",
         updatedAt: "2026-10-17T16:39:00-07:00",
+      },
+      {
+        id: "discord-demo", appId: "discord", source: "discord", roleId: "social",
+        subject: "Demo rehearsal · # build-night", recipient: "Nico",
+        address: "# build-night · Makers lounge",
+        context: "Can you join the rehearsal and walk us through the inbox?",
+        body: "yeah, I can walk through the inbox. let’s meet at [TIME] and do a quick run before the demo.",
+        updatedAt: "2026-10-18T00:12:00-07:00",
       },
     ],
     preferences: { automaticDrafts: true, learnFromEdits: true },

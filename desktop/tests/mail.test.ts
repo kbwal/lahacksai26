@@ -47,7 +47,7 @@ describe("native send boundary", () => {
     h.dialog.showMessageBox.mockResolvedValue({ response: 0 });
     expect(await h.send()).toEqual({ status: "cancelled" });
     expect(h.worker).not.toHaveBeenCalled();
-    expect(h.workspace.drafts).toHaveLength(5);
+    expect(h.workspace.drafts).toHaveLength(6);
   });
   it("shows the real recipient and body, then removes only the acknowledged draft", async () => {
     const h = harness();
@@ -66,7 +66,7 @@ describe("native send boundary", () => {
         body: "Thanks, 2:00 PM works for me.",
       }),
     );
-    expect(h.workspace.drafts).toHaveLength(4);
+    expect(h.workspace.drafts).toHaveLength(5);
     expect(h.workspace.drafts.some((d) => d.id === "office")).toBe(false);
   });
   it("blocks sample drafts and missing details before confirmation", async () => {
@@ -95,7 +95,7 @@ describe("native send boundary", () => {
     h.worker.mockResolvedValue({ status: "uncertain", messageId: "" });
     expect((await h.send()).status).toBe("uncertain");
     expect(h.saveWorkspace).not.toHaveBeenCalled();
-    expect(h.workspace.drafts).toHaveLength(5);
+    expect(h.workspace.drafts).toHaveLength(6);
   });
   it("does not report failed delivery if local persistence fails after Gmail acknowledges", async () => {
     const h = harness();

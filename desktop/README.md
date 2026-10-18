@@ -25,7 +25,7 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 
 ## Implemented
 
-- Left navigation filters drafts by All apps, Gmail, Slack or Outlook, with consistent app colors. Inbox search matches people, addresses, message/context text, roles and app names within the selected app. Empty results have a clear-search action.
+- Left navigation filters drafts by All apps, Gmail, Slack, Discord or Outlook, with consistent app colors. Inbox search matches people, addresses, message/context text, roles and app names within the selected app. Empty results have a clear-search action.
 - App headers show only the roles allowed for that app.
 - Roles are based on relationships, not platforms. Professional and Social are defaults.
 - New roles allow every app. Existing roles can opt out of individual apps.
@@ -39,7 +39,7 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 
 ## Integration handoff
 
-The `infra` branch Gmail worker is included. Training modules are unchanged. Gmail uses the native worker and macOS Keychain; no HTTP server or renderer tokens are needed. Slack and Outlook sending are not implemented. The UI starts with a **Sample workspace** label; its connection controls only toggle sample state. Imported workspaces use **Local workspace** and account controls are connector-managed.
+The Gmail, Slack and Discord workers are included. They use the native sidecar and macOS Keychain; no HTTP server or renderer tokens are needed. Slack and Discord suggestions can be reviewed, copied and opened in their original conversations; sending happens in the provider app. Outlook is not connected. The UI starts with a **Sample workspace** label; sample connection toggles only affect demo state. Loading real suggestions switches to **Local workspace** and clears sample drafts and training-readiness claims.
 
 The shared contract is [`src/types.ts`](src/types.ts). Import [`examples/sample-workspace.json`](examples/sample-workspace.json) through Settings to exercise the boundary. The service should supply:
 
@@ -47,14 +47,15 @@ The shared contract is [`src/types.ts`](src/types.ts). Import [`examples/sample-
 interface Workspace {
   version: 1;
   mode: 'local';
-  connections: { id: 'gmail' | 'slack' | 'outlook'; name: string; connected: boolean }[];
+  connections: { id: 'gmail' | 'slack' | 'discord' | 'outlook'; name: string; connected: boolean }[];
   roles: {
     id: string; name: string; description: string; kind: 'default' | 'custom';
-    excludedApps: ('gmail' | 'slack' | 'outlook')[];
+    excludedApps: ('gmail' | 'slack' | 'discord' | 'outlook')[];
     usableExamples: number; trainingReady: boolean;
   }[];
   drafts: {
-    id: string; appId: 'gmail' | 'slack' | 'outlook'; roleId: string;
+    id: string; appId: 'gmail' | 'slack' | 'discord' | 'outlook'; roleId: string;
+    source?: 'gmail' | 'slack' | 'discord';
     subject: string; recipient: string; address: string; context: string;
     body: string; updatedAt: string; externalUrl?: string; localChanges?: boolean;
   }[];
@@ -62,13 +63,13 @@ interface Workspace {
 }
 ```
 
-All three connection records must be present, including disconnected integrations. IDs must be unique; each draft must refer to a known role. Inputs are bounded to 30 roles, 500 drafts, and a 10 MB file. Official Gmail, Slack and Outlook HTTPS links are allowed; other URLs are rejected in the renderer and native shell.
+All four connection records must be present, including disconnected integrations. Older three-app snapshots automatically gain a disconnected Discord record. IDs must be unique; each draft must refer to a known role. Inputs are bounded to 30 roles, 500 drafts, and a 10 MB file. Official Gmail, Slack, Discord and Outlook HTTPS links are allowed; other URLs are rejected in the renderer and native shell. `source` preserves the pipeline label and must match `appId`; older snapshots infer it automatically for Gmail, Slack and Discord.
 
-`src/lib/storage.ts` remains the local workspace persistence boundary. Native Gmail IPC invokes the infra sidecar for account discovery, current drafts and explicit sends. Role/preferences are still local. Time edits say **Updated locally** until sent: sending includes them in the outgoing text, while opening the original app shows the version saved there. Slack draft updates and sending still need their connector.
+`src/lib/storage.ts` remains the local workspace persistence boundary. Native Gmail IPC invokes the infra sidecar for account discovery, current drafts and explicit sends. Chat IPC lists saved connections, reads suggestions, and runs bounded sync/generation. Roles/preferences are still local. Detail edits say **Updated locally**: copying or sending includes them in the outgoing text, while opening the original app shows its own version.
 
 The fine-tuned model decides whether a message needs a reply. Only include resulting auto-drafts in the snapshot; manual drafting can create the same `Draft` record. The UI does not infer readiness from an arbitrary sample-count threshold: the training service provides `trainingReady` after filtering and quality checks. Three short messages must not become a trained persona just because a user created a role.
 
-For automatic drafting, an integration should honor both the connected account and the role's exclusion policy. Changing policy does not erase previously trained information; retraining is needed for that. Gmail/Slack send guards remain the extension/server's responsibility. The dashboard recognizes arbitrary uppercase bracketed tokens, including model-invented types, and blocks sending until every placeholder is filled.
+For automatic drafting, an integration should honor both the connected account and the role's exclusion policy. Changing policy does not erase previously trained information; retraining is needed for that. The dashboard recognizes arbitrary uppercase bracketed tokens, including model-invented types, and blocks Gmail sending until every placeholder is filled.
 
 ## Storage and native boundary
 
@@ -93,6 +94,16 @@ Only app-owned, published Gmail drafts are listed for sending. **Send** opens a 
 A durable SQLite journal claims each draft before the provider call. Sends are never automatically retried; timeout, server error or incomplete acknowledgement remains uncertain and blocks replay even after restarting the app. A definitive rejecting response permits a later explicit retry. The UI removes a draft only after Gmail acknowledges delivery. Successful sends record the final text for infra's existing feedback pipeline. Scheduled generation continues to create drafts only and never calls the desktop send path.
 
 Tests use fake Gmail clients and isolated databases; they do not read credentials or send real mail. Live OAuth/send testing requires an explicitly reviewed real message. Browser preview and sample data show the send control disabled; use the Mac app with an existing Gmail connection for delivery.
+
+## Slack and Discord inboxes
+
+Complete the provider setup in [`MESSAGE_PIPELINE.md`](../MESSAGE_PIPELINE.md) first. In either app's inbox or Settings, choose **Use existing connection…** and select the worker's `messages.db`. Development discovers `data/messages.db` automatically; the packaged app uses the worker's Application Support data home. `MARGIN_MESSAGES_DB` overrides both with an absolute path. Choose the saved workspace/server and account, then **Load drafts**. This reads local suggestions without contacting the provider or accessing credentials.
+
+**Sync & draft** polls the selected connection and generates up to three suggestions with the local instruct model. It uses a five-page budget per channel; repeat after provider backoff or run the existing worker for large imports. Status shows incomplete scans, channel failures, last completed sync and rate limits. The app does not start a background poller; `messages ... run --interval 1800 --suggest-replies` remains the continuous worker path. Use **Load drafts** to refresh suggestions written by that worker.
+
+Each suggestion carries `source`, `appId`, and a `chat` reference with source/account/workspace/channel/thread/suggestion IDs. Stable IDs keep local placeholder edits through refresh. Superseded unedited suggestions disappear; edited ones are retained with a conversation-changed warning. Other accounts' drafts and manually composed messages survive refresh. The current infra stores provider IDs rather than channel/member display names, so real connection labels may show those IDs.
+
+**Copy draft** copies the latest local text; **Open in Slack/Discord** opens the original conversation. No provider send or native draft-writing API is used. First-time Slack OAuth, Discord bot installation/channel selection, and mapping dashboard personas to worker adapters remain separate setup work. The composer supports both apps using the chosen persona description.
 
 ## New messages and personas
 

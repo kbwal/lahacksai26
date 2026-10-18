@@ -10,7 +10,7 @@ function registerCompose({ app, ipcMain, dialog, trusted, getWorkspace, getWindo
     if (busy) throw new Error('A message is already being drafted.');
     busy = true;
     try {
-      if (!request || !['gmail','slack','outlook'].includes(request.appId)) throw new Error('Choose an app.');
+      if (!request || !['gmail','slack','discord','outlook'].includes(request.appId)) throw new Error('Choose an app.');
       for (const [key, max] of [['prompt',6000],['recipient',320],['subject',300]]) {
         if (typeof request[key] !== 'string' || request[key].length > max || /\0/.test(request[key])) throw new Error(`Invalid ${key}.`);
       }

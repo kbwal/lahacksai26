@@ -16,7 +16,9 @@ import {
   WarningCircleIcon as AlertCircle,
   CaretRightIcon as ChevronRight,
 } from "@phosphor-icons/react";
-import type { AppId, Draft, Page, Persona, Workspace } from "./types";
+import type { AppId, ChatInbox, ChatSource, Draft, Page, Persona, Workspace } from "./types";
+import { chatKey, mergeChatInbox } from "./lib/chat";
+import ChatInboxControls from "./components/ChatInboxControls";
 import {
   applyPersonalDetails,
   applyWorkspaceDetails,
@@ -96,6 +98,28 @@ function Dashboard({ initial }: { initial: Workspace }) {
     [saved, setSaved] = useState(false),
     [notice, setNotice] = useState("");
   const [composing, setComposing] = useState(false);
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const [chatSelections, setChatSelections] = useState<Record<ChatSource, string>>(() => {
+    const selection = (source: ChatSource) => {
+      const ref = initial.drafts.find(d => d.chat?.source === source)?.chat;
+      return ref ? chatKey(ref.accountId, ref.workspaceId) : "";
+    };
+    return {slack: selection("slack"), discord: selection("discord")};
+  });
+  function loadChatInbox(result: ChatInbox) {
+    const next = mergeChatInbox(stateRef.current, result);
+    stateRef.current = next;
+    setState(next);
+    selectApp(result.source);
+    setQuery("");
+    setNotice(`Loaded ${result.drafts.length} ${APP_NAMES[result.source]} ${result.drafts.length === 1 ? "suggestion" : "suggestions"}. Local edits are preserved.`);
+  }
+  function chatControls(source: ChatSource) {
+    return <ChatInboxControls key={source} source={source} selection={chatSelections[source]}
+      onSelect={selection => setChatSelections(values => ({...values, [source]: selection}))}
+      onLoaded={loadChatInbox} />;
+  }
   const importRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [mailBusy, setMailBusy] = useState(false),
@@ -221,6 +245,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
   }
   function sendUnavailable(draft: Draft) {
     if (draft.composed) return "New messages are saved locally. Copy this draft into your app to send it.";
+    if (draft.appId === "slack" || draft.appId === "discord")
+      return `Copy this reply, then review and send it in ${APP_NAMES[draft.appId]}.`;
     if (!window.margin) return "Sending is available in the Mac app.";
     if (draft.appId !== "gmail")
       return `${APP_NAMES[draft.appId]} sending is not connected yet.`;
@@ -438,7 +464,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     <span
                       className="status-dot on"
                     />
-                    Automatic drafts on
+                    {app === "slack" || app === "discord" ? "Local suggestions" : "Automatic drafts on"}
                   </span>
                   </div>
                 </div>
@@ -467,6 +493,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   </button>
                 </div>
               </section>
+              {(app === "slack" || app === "discord") && chatControls(app)}
               <div className="inbox-toolbar">
                 <div className="inbox-search">
                   <MagnifyingGlassIcon size={17} aria-hidden="true" />
@@ -575,6 +602,9 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     {activeDraft.context && <p className="sub context">
                       In reply to: “{activeDraft.context}”
                     </p>}
+                    {activeDraft.chat?.stale && <p className="warning spaced">
+                      The conversation has changed. Your edits are kept here; open the original thread before using this reply.
+                    </p>}
                     {(activeRole.excludedApps.includes(activeDraft.appId) ||
                       !state.connections.find((c) => c.id === activeDraft.appId)
                         ?.connected) && (
@@ -638,8 +668,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           <UsersRound size={14} />
                           {activeRole.name} voice
                         </span>
-                        {activeDraft.composed && <button onClick={async () => {
-                          try { if (window.margin) await window.margin.copyDraft(activeDraft.id); else await navigator.clipboard.writeText(activeDraft.body); setNotice("Draft copied. Paste it into your app to send."); }
+                        {(activeDraft.composed || activeDraft.appId === "slack" || activeDraft.appId === "discord") && <button onClick={async () => {
+                          try { if (window.margin) { await saveWorkspace(state); await window.margin.copyDraft(activeDraft.id); } else await navigator.clipboard.writeText(activeDraft.body); setNotice("Draft copied. Paste it into your app to send."); }
                           catch { setError("Could not copy. Select and copy the draft text instead."); }
                         }}>Copy draft</button>}
                         <div className="row draft-actions">
@@ -647,7 +677,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                             Open in {APP_NAMES[activeDraft.appId]}
                             <ArrowUpRight size={16} />
                           </button>
-                          <button
+                          {activeDraft.appId !== "slack" && activeDraft.appId !== "discord" && <button
                             className="primary"
                             disabled={
                               !!sendUnavailable(activeDraft) ||
@@ -662,7 +692,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           >
                             <PaperPlaneTiltIcon size={16} />
                             {sendingId === activeDraft.id ? "Sending…" : "Send"}
-                          </button>
+                          </button>}
                         </div>
                       </div>
                       <p className="link-note">
@@ -671,7 +701,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       </p>
                       <p className="link-note">
                         {activeDraft.localChanges
-                          ? "This edit is saved locally. Live app sync is not connected yet."
+                          ? "Your edits are saved locally and included when you copy or send this draft."
                           : activeDraft.externalUrl
                             ? "Review, edit and send in the original app."
                             : `No specific draft link supplied. Opens ${APP_NAMES[activeDraft.appId] === "Gmail" ? "Gmail’s Drafts folder" : APP_NAMES[activeDraft.appId]}.`}
@@ -797,7 +827,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           {c.connected
                             ? state.mode === "demo"
                               ? "Sample connection"
-                              : "Connected via imported workspace"
+                              : "Connection saved locally"
                             : "Not connected"}
                         </small>
                       </div>
@@ -865,10 +895,12 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     </div>
                   </section>
                 )}
+                {chatControls("slack")}
+                {chatControls("discord")}
                 <h2 className="section-title">Workspace data</h2>
                 <p className="sub spaced">
                   {state.mode === "demo"
-                    ? "Exploring sample data. No email or Slack account is connected."
+                    ? "Exploring sample data. No real accounts are connected."
                     : "Using a local snapshot. Draft text and persona changes stay on this device."}
                 </p>
                 <div className="row spaced">
@@ -946,7 +978,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
             }));
             setDetailEditor(null);
             setNotice(
-              "Detail saved on this device. Sending from Margin includes your changes.",
+              "Detail saved on this device. Copying or sending includes your changes.",
             );
           }}
         />

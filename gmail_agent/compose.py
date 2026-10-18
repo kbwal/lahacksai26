@@ -14,7 +14,7 @@ def compose_messages(payload):
             raise ValueError(f"Invalid {key}")
     if not payload["prompt"].strip() or not payload["persona"].strip():
         raise ValueError("Choose a persona and describe your message")
-    if payload.get("appId") not in {"gmail", "slack", "outlook"}:
+    if payload.get("appId") not in {"gmail", "slack", "discord", "outlook"}:
         raise ValueError("Choose a valid app")
     return [
         {
