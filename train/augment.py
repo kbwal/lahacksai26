@@ -154,7 +154,7 @@ def request_for(model, tokenizer, message: str, max_chars: int = 4000) -> str:
 
 class Endpoint:
     """An OpenAI-compatible chat endpoint standing in for the local model: `persona_for` and
-    `request_for` with the same prompts. Waits out rate limits and a waking deployment."""
+    `request_for` with the same prompts. Retries rate limits, a waking deployment and server errors."""
 
     def __init__(self, url: str, api_key: str):
         self.url, self.api_key = url.rstrip("/") + "/chat/completions", api_key
@@ -171,7 +171,7 @@ class Endpoint:
                 with urllib.request.urlopen(req, timeout=120) as r:
                     return json.load(r)
             except urllib.error.HTTPError as e:
-                if e.code not in (429, 503) or attempt == 7:
+                if (e.code != 429 and e.code < 500) or attempt == 7:
                     raise RuntimeError(f"{self.url}: HTTP {e.code} {e.read().decode(errors='replace')[:500]}") from None
                 time.sleep(float(e.headers.get("Retry-After") or 5))
 
