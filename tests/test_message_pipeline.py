@@ -1,7 +1,5 @@
 import json
-import runpy
 import sqlite3
-import sys
 import time
 from dataclasses import replace
 from types import SimpleNamespace
@@ -16,7 +14,7 @@ from message_pipeline.models import Message
 from message_pipeline.replies import dismiss, generate_suggestions, reconcile
 from message_pipeline.store import Store, export_gmail
 from message_pipeline.sync import sync_once
-from train.format import Pair, prompt_text
+from train.format import Conversation, prompt_ids
 
 KEY = ("slack", "U1", "T1")
 
@@ -360,9 +358,9 @@ def test_jsonl_permissions_no_overwrite_and_source_validation(tmp_path):
     with pytest.raises(ValueError):
         message(source="untrusted")
     for source in ("gmail", "slack", "discord"):
-        pair = Pair.from_dict({"recipient": "user", "thread": "Hi", "source": source})
-        assert prompt_text(pair).startswith(f"Source: {source}\n")
-    assert Pair.from_dict({"recipient": "user"}).source == "gmail"
+        conversation = Conversation.from_dict({"adapter_name": "social", "source": source})
+        tokenizer = SimpleNamespace(encode=lambda text, **_: list(text.encode()))
+        assert bytes(prompt_ids(tokenizer, conversation, "base")).decode().startswith(f"Source: {source}\n")
 
 
 def test_bundled_cli_dispatch_and_export(store, capsys):
@@ -422,24 +420,13 @@ def test_connect_verifies_slack_identity_before_saving_token(tmp_path, monkeypat
 
 
 def test_context_only_exports_are_rejected_by_training_loader(tmp_path, monkeypatch):
-    core = SimpleNamespace()
-    optim = SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=core, optimizers=optim))
-    monkeypatch.setitem(sys.modules, "mlx.core", core)
-    monkeypatch.setitem(sys.modules, "mlx.optimizers", optim)
-    monkeypatch.setitem(sys.modules, "mlx_lm", SimpleNamespace(load=None))
-    monkeypatch.setitem(
-        sys.modules, "mlx_lm.tuner.trainer", SimpleNamespace(TrainingArgs=None, train=None)
-    )
-    monkeypatch.setitem(
-        sys.modules, "mlx_lm.tuner.utils", SimpleNamespace(linear_to_lora_layers=None)
-    )
-    monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(save_config=None))
-    namespace = runpy.run_module("train.trainer", run_name="pipeline_test_trainer")
+    from train.trainer import by_adapter
+
     path = tmp_path / "messages.jsonl"
     path.write_text(json.dumps({"usage": "context_only", "source": "discord"}) + "\n")
-    with pytest.raises(ValueError, match="Context-only"):
-        namespace["load_examples"](None, path, "base")
+    with pytest.raises(ValueError, match="context-only"):
+        by_adapter([str(path)], Conversation.from_dict)
+
 
 
 class Generator:
