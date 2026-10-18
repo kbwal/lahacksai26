@@ -84,4 +84,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from gmail_agent.locking import process_lock
+
+    with process_lock(Path("data/model.lock")):
+        main()

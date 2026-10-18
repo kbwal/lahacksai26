@@ -6,3 +6,9 @@ adapters/
 *.mbox
 .DS_Store
 models/
+.pytest_cache/
+.ruff_cache/
+client_secret*.json
+credentials.json
+build/
+dist/
