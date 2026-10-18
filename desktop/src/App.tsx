@@ -4,16 +4,13 @@ import {
   CheckIcon as Check,
   ClockIcon as Clock3,
   PenNibIcon as Feather,
-  NotePencilIcon as FilePenLine,
   HardDriveIcon as HardDrive,
-  StackIcon as Layers,
   EnvelopeSimpleIcon as Mail,
   PencilSimpleIcon as Pencil,
   PlusIcon as Plus,
   GearSixIcon as Settings,
   UsersThreeIcon as UsersRound,
   UploadSimpleIcon as Upload,
-  SlackLogoIcon,
   WarningCircleIcon as AlertCircle,
   CaretRightIcon as ChevronRight,
 } from "@phosphor-icons/react";
@@ -29,6 +26,7 @@ import {
 import { loadWorkspace, openExternal, saveWorkspace } from "./lib/storage";
 import { sampleWorkspace } from "./lib/sample";
 import RoleEditor from "./components/RoleEditor";
+import AppMark from "./components/AppMark";
 import TimePicker, { TimeToken } from "./components/TimePicker";
 function message(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -221,17 +219,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 aria-pressed={page === "drafts" && app === c.id}
                 onClick={() => selectApp(c.id)}
               >
-                <span className="app-mark">
-                  {c.id === "all" ? (
-                    <Layers size={18} />
-                  ) : c.id === "slack" ? (
-                    <SlackLogoIcon size={20} />
-                  ) : c.id === "gmail" ? (
-                    <Mail size={18} />
-                  ) : (
-                    "O"
-                  )}
-                </span>
+                <AppMark app={c.id} />
                 <span className="nav-info">
                   <strong>{c.name}</strong>
                   <small>
@@ -330,13 +318,19 @@ function Dashboard({ initial }: { initial: Workspace }) {
                         <button
                           key={d.id}
                           className="draft-item"
+                          data-app={app === "all" ? d.appId : undefined}
                           aria-pressed={activeDraft.id === d.id}
                           onClick={() => setDraftId(d.id)}
                         >
                           <div className="row between">
-                            <span className="draft-role">
-                              {app === "all" ? APP_NAMES[d.appId] + " · " : ""}
-                              {role.name}
+                            <span className="draft-meta">
+                              {app === "all" && (
+                                <span className="app-tag" data-app={d.appId}>
+                                  <AppMark app={d.appId} size={12} />
+                                  {APP_NAMES[d.appId]}
+                                </span>
+                              )}
+                              <span className="draft-role">{role.name}</span>
                             </span>
                             <span className="sub">
                               {new Date(d.updatedAt).toLocaleDateString(
@@ -364,8 +358,12 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   <section className="draft-detail" aria-label="Draft preview">
                     <div className="row between">
                       <span className="overline">Draft preview</span>
-                      <span className="badge">
-                        <FilePenLine size={14} />
+                      <span
+                        className="badge draft-source"
+                        data-app={activeDraft.appId}
+                      >
+                        <AppMark app={activeDraft.appId} size={14} />
+                        {app === "all" && `${APP_NAMES[activeDraft.appId]} · `}
                         {activeDraft.localChanges
                           ? "Updated locally"
                           : state.mode === "demo"
@@ -562,7 +560,11 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 {state.connections.map((c) => (
                   <div className="option-row" key={c.id}>
                     <div className="row">
-                      <span className="initial">{c.name[0]}</span>
+                      <AppMark
+                        app={c.id}
+                        size={24}
+                        className="connection-mark"
+                      />
                       <div>
                         <h3>{c.name}</h3>
                         <small>
@@ -598,7 +600,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     ? "Sample connections don’t access real accounts."
                     : "Live account linking is handled by your local connector."}
                 </p>
-                <h2 className="section-title">Drafting & learning</h2>
+                <h2 className="section-title">Drafting</h2>
                 <label className="option-row">
                   <span>
                     <h3>Automatic drafts</h3>
@@ -620,27 +622,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     }
                   />
                 </label>
-                <label className="option-row">
-                  <span>
-                    <h3>Learn from my sent edits</h3>
-                    <small>Use final messages to improve your voices.</small>
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={state.preferences.learnFromEdits}
-                    onChange={(e) =>
-                      setState((s) => ({
-                        ...s,
-                        preferences: {
-                          ...s.preferences,
-                          learnFromEdits: e.target.checked,
-                        },
-                      }))
-                    }
-                  />
-                </label>
                 <p className="sub spaced">
-                  These preferences are saved locally. “Draft in my voice” stays
+                  This preference is saved locally. “Draft in my voice” stays
                   available through the app integration.
                 </p>
                 <h2 className="section-title">Workspace data</h2>

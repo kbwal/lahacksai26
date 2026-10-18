@@ -306,8 +306,60 @@ small {
   color: var(--sub);
   flex-shrink: 0;
 }
-.nav-app[aria-pressed="true"] .app-mark {
-  color: var(--accent);
+[data-app="gmail"] {
+  --app-color: light-dark(#b93c32, #f08c81);
+  --app-tint: light-dark(#fbecea, #382725);
+}
+[data-app="slack"] {
+  --app-color: light-dark(#874a83, #d4a1d0);
+  --app-tint: light-dark(#f5eaf4, #332734);
+}
+[data-app="outlook"] {
+  --app-color: light-dark(#196eb5, #83b9ee);
+  --app-tint: light-dark(#e8f2fb, #23303d);
+}
+.app-mark[data-app] {
+  color: var(--app-color, var(--sub));
+}
+.outlook-mark {
+  font-family: var(--serif);
+  font-size: 1.3em;
+  font-weight: 600;
+  line-height: 1;
+}
+.app-mark.connection-mark {
+  width: 38px;
+  height: 38px;
+  border-radius: 7px;
+  background: var(--app-tint);
+}
+.draft-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.app-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--app-color);
+  background: var(--app-tint);
+  border-radius: 3px;
+  padding: 2px 5px;
+}
+.app-tag .app-mark,
+.draft-source .app-mark {
+  width: auto;
+  height: auto;
+}
+.draft-item[data-app][aria-pressed="true"] {
+  border-left-color: var(--app-color);
+}
+.draft-source {
+  color: var(--app-color);
 }
 .nav-info {
   flex: 1;
