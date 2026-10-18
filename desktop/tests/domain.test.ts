@@ -50,7 +50,7 @@ describe("role policy", () => {
   it("reports blank fields and duplicate names without rejecting an unchanged role", () => {
     const roles = sampleWorkspace().roles;
     expect(roleFormErrors("   ", "   ", roles)).toEqual({
-      name: "Enter a role name.",
+      name: "Enter a persona name.",
       description: "Describe when to use this voice.",
     });
     expect(roleFormErrors(" professional ", "Clients", roles).name).toContain(
@@ -65,14 +65,13 @@ describe("role policy", () => {
   });
   it("uses all apps by default and applies exclusions independently per role", () => {
     const roles = sampleWorkspace().roles;
-    expect(allowedRoles(roles, "outlook")).toHaveLength(3);
+    expect(allowedRoles(roles, "outlook")).toHaveLength(2);
     roles[0].excludedApps = ["gmail"];
     expect(allowedRoles(roles, "gmail").map((r) => r.name)).toEqual([
       "Social",
-      "Academic",
     ]);
-    expect(allowedRoles(roles, "slack")).toHaveLength(3);
-    expect(allowedRoles(roles, "all")).toHaveLength(3);
+    expect(allowedRoles(roles, "slack")).toHaveLength(2);
+    expect(allowedRoles(roles, "all")).toHaveLength(2);
   });
 });
 describe("import boundary", () => {
@@ -150,7 +149,7 @@ describe("inbox search", () => {
     ).toEqual(["handoff"]);
     expect(
       searchDrafts(w.drafts, "gmail professional", w.roles).map((d) => d.id),
-    ).toEqual(["feedback"]);
+    ).toEqual(["office", "feedback"]);
     expect(
       searchDrafts(w.drafts, "professor.chen@university.example", w.roles),
     ).toHaveLength(1);
@@ -275,4 +274,34 @@ describe("model-marked details", () => {
     w.drafts[0].placeholderEdits!.values["4"] = { value: "bad" };
     expect(() => parseWorkspace(w)).toThrow("detail index");
   });
+});
+
+describe('persona defaults migration', () => {
+  it('removes the old Academic default while preserving drafts and custom personas', () => {
+    const w = sampleWorkspace();
+    expect(w.roles.map(p => p.name)).toEqual(['Professional', 'Social']);
+    w.roles.push({...w.roles[0], id:'academic', name:'Academic'});
+    w.drafts[0].roleId = 'academic';
+    const migrated = parseWorkspace(w);
+    expect(migrated.roles.map(p => p.id)).not.toContain('academic');
+    expect(migrated.drafts[0].roleId).toBe('professional');
+    expect(migrated.drafts[0].body).toBe(w.drafts[0].body);
+    w.roles[2].kind = 'custom';
+    expect(parseWorkspace(w).roles.map(p => p.id)).toContain('academic');
+  });
+  it('persists locally composed drafts without reply delivery metadata', () => {
+    const w = sampleWorkspace();
+    w.drafts[0].composed = true;
+    expect(parseWorkspace(JSON.parse(JSON.stringify(w))).drafts[0].composed).toBe(true);
+  });
+});
+
+
+it('turns model-generated mixed-case fields into editable placeholders', async () => {
+  const {normalizeComposedBody, draftDetails} = await import('../src/lib/domain');
+  expect(normalizeComposedBody('Hi [Your Name], join [Your Link] at [Time].')).toBe('Hi [YOUR NAME], join [LINK] at [TIME].');
+  const w = sampleWorkspace();
+  w.drafts[0].composed = true;
+  w.drafts[0].body = 'Join [Your Link]';
+  expect(draftDetails(parseWorkspace(w).drafts[0])[0].token).toBe('[LINK]');
 });

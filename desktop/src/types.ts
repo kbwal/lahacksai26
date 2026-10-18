@@ -32,6 +32,7 @@ export interface Draft {
   context: string;
   body: string;
   updatedAt: string;
+  composed?: boolean;
   delivery?: {
     accountId: string;
     generationId: number;
@@ -58,6 +59,8 @@ export interface TimeChoice {
 declare global {
   interface Window {
     margin?: {
+      copyDraft(id: string): Promise<void>;
+      composeMessage(request: { appId: AppId; personaId: string; prompt: string; recipient: string; subject: string; changeModel: boolean }): Promise<{body: string} | null>;
       gmailAccounts(): Promise<string[]>;
       chooseGmailConnection(): Promise<string[] | null>;
       gmailInbox(

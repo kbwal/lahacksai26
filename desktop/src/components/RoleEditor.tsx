@@ -44,10 +44,10 @@ export default function RoleEditor({
     });
   }
   return (
-    <Modal title={role ? `Edit ${role.name}` : "Add a role"} onClose={onClose}>
+    <Modal title={role ? `Edit ${role.name}` : "Add a persona"} onClose={onClose}>
       <form onSubmit={submit} noValidate>
         <label className="field">
-          Role name
+          Persona name
           <input
             ref={nameInput}
             data-initial-focus
@@ -97,7 +97,7 @@ export default function RoleEditor({
             <h3>App exceptions</h3>
             <p className="sub">
               Every app is allowed by default. Turn off an app to exclude this
-              role.
+              persona.
             </p>
             {connections.map((app) => (
               <label className="option-row" key={app.id}>
@@ -111,7 +111,7 @@ export default function RoleEditor({
                 </span>
                 <input
                   type="checkbox"
-                  aria-label={`Allow ${app.name} for this role`}
+                  aria-label={`Allow ${app.name} for this persona`}
                   checked={!excluded.includes(app.id)}
                   onChange={(e) =>
                     setExcluded(
@@ -125,7 +125,7 @@ export default function RoleEditor({
             ))}
             <p className="sub spaced">
               Exclusions stop future drafts and future training from that app
-              for this role. Existing drafts remain visible; trained style stays
+              for this persona. Existing drafts remain visible; trained style stays
               until retraining.
             </p>
           </>
@@ -146,7 +146,7 @@ export default function RoleEditor({
             Cancel
           </button>
           <button className="primary" type="submit">
-            {role ? "Save role" : "Create role"}
+            {role ? "Save persona" : "Create persona"}
           </button>
         </div>
       </form>

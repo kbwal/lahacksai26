@@ -46,6 +46,7 @@ def parser():
     result.add_argument("--db", type=Path, default=paths["db"])
     result.add_argument("--account", help="Connected Gmail address; optional with one account")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("desktop-compose", help="Draft a new message locally from JSON on stdin")
     commands.add_parser("desktop-accounts", help="List connected Gmail accounts for the app")
     commands.add_parser("desktop-inbox", help="Fetch current app-owned Gmail drafts")
     commands.add_parser("desktop-send", help="Send one reviewed draft from JSON on stdin")
@@ -157,6 +158,16 @@ def main(argv=None):
     store = None
     client = None
     try:
+        if args.command == "desktop-compose":
+            from gmail_agent.compose import compose
+
+            raw = sys.stdin.read(20001)
+            if len(raw) > 20000:
+                raise ValueError("Compose request is too large")
+            with redirect_stdout(sys.stderr):
+                result = compose(json.loads(raw))
+            print(json.dumps(result))
+            return 0
         if args.command == "info":
             print(json.dumps(runtime.info(), indent=2))
             return 0
@@ -281,9 +292,18 @@ def main(argv=None):
         print(f"Error: {error}", file=sys.stderr)
         return 1
     except Exception as error:  # noqa: BLE001 -- redact provider exceptions at the CLI boundary
-        print(
-            f"Error: {type(error).__name__}. Check status and reconnect if needed.", file=sys.stderr
-        )
+        if args.command == "desktop-compose":
+            detail = (
+                f"Missing local model dependency: {error.name}"
+                if isinstance(error, ModuleNotFoundError)
+                else f"Local generation failed ({type(error).__name__}). Check your instruct model and try again."
+            )
+            print(f"Error: {detail}", file=sys.stderr)
+        else:
+            print(
+                f"Error: {type(error).__name__}. Check status and reconnect if needed.",
+                file=sys.stderr,
+            )
         return 1
     finally:
         if client is not None:

@@ -34,6 +34,14 @@ export function isAllowedExternalUrl(value: string): boolean {
     return false;
   }
 }
+export function normalizeComposedBody(body: string): string {
+  return body.replace(/\[([A-Za-z][A-Za-z0-9_ '-]{0,79})\]/g, (_, label: string) => {
+    const upper = label.trim().toUpperCase();
+    const unprefixed = upper.replace(/^YOUR[ _]+/, "");
+    const token = ["DATE", "TIME", "AMOUNT", "PHONE", "ADDRESS", "LINK"].includes(unprefixed) ? unprefixed : upper;
+    return `[${token}]`;
+  });
+}
 export function placeholders(text: string): string[] {
   return [...new Set(text.match(/\[[A-Z][A-Z0-9_ '-]*\]/g) || [])];
 }
@@ -231,7 +239,7 @@ export function roleFormErrors(
   editingId?: string,
 ): { name?: string; description?: string } {
   const errors: { name?: string; description?: string } = {};
-  if (!name.trim()) errors.name = "Enter a role name.";
+  if (!name.trim()) errors.name = "Enter a persona name.";
   else if (
     roles.some(
       (r) =>
@@ -240,7 +248,7 @@ export function roleFormErrors(
     )
   )
     errors.name =
-      "A role with this name already exists. Choose a different name.";
+      "A persona with this name already exists. Choose a different name.";
   if (!description.trim())
     errors.description = "Describe when to use this voice.";
   return errors;
@@ -295,7 +303,7 @@ export function parseWorkspace(input: unknown): Workspace {
       !Number.isInteger(r.usableExamples) ||
       (r.usableExamples as number) < 0
     )
-      throw new Error("Invalid role.");
+      throw new Error("Invalid persona.");
     return {
       id,
       name,
@@ -306,14 +314,19 @@ export function parseWorkspace(input: unknown): Workspace {
       trainingReady: bool(r.trainingReady),
     };
   });
+  const removedAcademic = roles.find((r) => r.id === "academic" && r.kind === "default");
+  if (removedAcademic && roles.length > 1) roles.splice(roles.indexOf(removedAcademic), 1);
+  else if (removedAcademic) removedAcademic.kind = "custom";
   unique(roles);
-  if (!roles.length) throw new Error("A workspace needs at least one role.");
+  if (!roles.length) throw new Error("A workspace needs at least one persona.");
   const drafts = array(w.drafts, 500).map((v) => {
     const d = object(v),
-      roleId = str(d.roleId, "draft role", 100),
+      roleId = removedAcademic && d.roleId === removedAcademic.id && removedAcademic.kind === "default"
+        ? (roles.find((r) => r.id === "professional") || roles[0]).id
+        : str(d.roleId, "draft persona", 100),
       id = str(d.id, "draft ID", 100);
     if (!id || !roles.some((r) => r.id === roleId))
-      throw new Error("Draft refers to an unknown role.");
+      throw new Error("Draft refers to an unknown persona.");
     const externalUrl =
       d.externalUrl === undefined
         ? undefined
@@ -322,7 +335,8 @@ export function parseWorkspace(input: unknown): Workspace {
       throw new Error(
         "Draft link must be an official Gmail, Slack or Outlook HTTPS URL.",
       );
-    const body = str(d.body, "draft body", 60000);
+    const rawBody = str(d.body, "draft body", 60000);
+    const body = d.composed === true && !d.placeholderEdits ? normalizeComposedBody(rawBody) : rawBody;
     let timeEdit: Draft["timeEdit"];
     if (d.timeEdit !== undefined) {
       const edit = object(d.timeEdit),
@@ -405,6 +419,7 @@ export function parseWorkspace(input: unknown): Workspace {
       placeholderEdits,
       updatedAt: str(d.updatedAt, "timestamp", 100),
       externalUrl,
+      composed: d.composed === undefined ? false : bool(d.composed),
       localChanges: d.localChanges === undefined ? false : bool(d.localChanges),
     };
   });

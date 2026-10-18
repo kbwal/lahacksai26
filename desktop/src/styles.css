@@ -1079,3 +1079,11 @@ input[type="checkbox"] {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+.compose-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.compose-fields select { width: 100%; }
+
+.compose-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+.compose-fields .field { margin: 0; min-width: 0; }
+.compose-fields .compose-prompt, .compose-fields > .row { grid-column: 1 / -1; }
+@media (max-width: 560px) { .compose-fields { grid-template-columns: 1fr; } }

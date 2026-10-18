@@ -30,6 +30,7 @@ import {
 } from "./lib/domain";
 import { loadWorkspace, openExternal, saveWorkspace } from "./lib/storage";
 import { sampleWorkspace } from "./lib/sample";
+import ComposeMessage from "./components/ComposeMessage";
 import RoleEditor from "./components/RoleEditor";
 import AppMark from "./components/AppMark";
 import DetailEditor, { DetailToken } from "./components/DetailEditor";
@@ -91,6 +92,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
   const [error, setError] = useState(""),
     [saved, setSaved] = useState(false),
     [notice, setNotice] = useState("");
+  const [composing, setComposing] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [mailBusy, setMailBusy] = useState(false),
@@ -152,8 +154,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
         })),
         drafts: [
           ...(state.mode === "demo"
-            ? []
-            : state.drafts.filter((d) => d.appId !== "gmail")),
+            ? state.drafts.filter((d) => d.composed)
+            : state.drafts.filter((d) => d.appId !== "gmail" || d.composed)),
           ...incoming,
         ],
       });
@@ -215,6 +217,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
     }
   }
   function sendUnavailable(draft: Draft) {
+    if (draft.composed) return "New messages are saved locally. Copy this draft into your app to send it.";
     if (!window.margin) return "Sending is available in the Mac app.";
     if (draft.appId !== "gmail")
       return `${APP_NAMES[draft.appId]} sending is not connected yet.`;
@@ -287,7 +290,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
       const imported = parseWorkspace(JSON.parse(await file.text()));
       if (
         !window.confirm(
-          "Replace this workspace with the imported data? This replaces the drafts, roles and preferences shown here.",
+          "Replace this workspace with the imported data? This replaces the drafts, personas and preferences shown here.",
         )
       )
         return;
@@ -397,7 +400,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
               onClick={() => setPage("roles")}
             >
               <UsersRound size={17} />
-              Edit your roles
+              Edit your personas
             </button>
             <p className="sub">
               {saved ? (
@@ -424,6 +427,10 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     <p className="overline">Drafts</p>
                     <h1>{app === "all" ? "All apps" : APP_NAMES[app]}</h1>
                   </div>
+                  <div className="row">
+                    <button className="primary" onClick={() => setComposing(true)} disabled={!!sendingId || mailBusy}>
+                      <Pencil size={16} /> Draft a message
+                    </button>
                   <span className="automation-status">
                     <span
                       className={`status-dot${state.preferences.automaticDrafts ? " on" : ""}`}
@@ -432,17 +439,18 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       ? "Automatic drafts on"
                       : "Manual drafting"}
                   </span>
+                  </div>
                 </div>
                 <p className="description">
                   {app === "all"
-                    ? "A reply for every part of your life."
-                    : `Review your replies, then pick up the conversation in ${APP_NAMES[app]}.`}
+                    ? "A message for every part of your life."
+                    : `Review your drafts, then pick up the conversation in ${APP_NAMES[app]}.`}
                 </p>
                 <div className="role-chips">
                   <span className="sub">
                     {app === "all"
-                      ? "Roles across your apps:"
-                      : "Allowed Roles:"}
+                      ? "Personas across your apps:"
+                      : "Allowed Personas:"}
                   </span>
                   {allowedRoles(state.roles, app).map((r) => (
                     <span key={r.id} className="role-label">
@@ -454,7 +462,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   )}
                   <button className="ghost" onClick={() => setPage("roles")}>
                     <Pencil size={14} />
-                    Edit your roles
+                    Edit your personas
                   </button>
                 </div>
               </section>
@@ -464,7 +472,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   <input
                     type="search"
                     aria-label="Search inbox"
-                    placeholder="Search people, messages, roles…"
+                    placeholder="Search people, messages, personas…"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                   />
@@ -550,7 +558,9 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       >
                         <AppMark app={activeDraft.appId} size={14} />
                         {app === "all" && `${APP_NAMES[activeDraft.appId]} · `}
-                        {activeDraft.localChanges
+                        {activeDraft.composed
+                          ? "New message · saved locally"
+                          : activeDraft.localChanges
                           ? "Updated locally"
                           : state.mode === "demo"
                             ? "Sample draft"
@@ -561,14 +571,14 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     <p className="address">
                       To {activeDraft.recipient} · {activeDraft.address}
                     </p>
-                    <p className="sub context">
+                    {activeDraft.context && <p className="sub context">
                       In reply to: “{activeDraft.context}”
-                    </p>
+                    </p>}
                     {(activeRole.excludedApps.includes(activeDraft.appId) ||
                       !state.connections.find((c) => c.id === activeDraft.appId)
                         ?.connected) && (
                       <p className="warning spaced">
-                        Existing draft · future drafting is paused for this role
+                        Existing draft · future drafting is paused for this persona
                         in this app.
                       </p>
                     )}
@@ -627,6 +637,10 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           <UsersRound size={14} />
                           {activeRole.name} voice
                         </span>
+                        {activeDraft.composed && <button onClick={async () => {
+                          try { if (window.margin) await window.margin.copyDraft(activeDraft.id); else await navigator.clipboard.writeText(activeDraft.body); setNotice("Draft copied. Paste it into your app to send."); }
+                          catch { setError("Could not copy. Select and copy the draft text instead."); }
+                        }}>Copy draft</button>}
                         <div className="row draft-actions">
                           <button onClick={() => void investigate(activeDraft)}>
                             Open in {APP_NAMES[activeDraft.appId]}
@@ -678,7 +692,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     {query.trim()
                       ? `No drafts match “${query.trim()}” in ${app === "all" ? "All apps" : APP_NAMES[app]}. Try another person or phrase.`
                       : connection && !connection.connected
-                        ? "All your roles are allowed by default. You can add exceptions in Edit your roles."
+                        ? "All your personas are allowed by default. You can add exceptions in Edit your personas."
                         : "Drafts for messages likely to need a reply will appear here. Manual drafting stays available in your apps."}
                   </p>
                   {query.trim() ? (
@@ -699,11 +713,11 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 <div className="row between">
                   <div>
                     <p className="overline">Personalization</p>
-                    <h1>Edit your roles</h1>
+                    <h1>Edit your personas</h1>
                   </div>
                 </div>
                 <p className="description">
-                  Give each part of your life its own voice. Every role uses all
+                  Give each part of your life its own voice. Every persona uses all
                   connected apps by default.
                 </p>
               </section>
@@ -717,8 +731,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           <h2>{r.name}</h2>
                           <p className="sub">
                             {r.kind === "default"
-                              ? "Default role"
-                              : "Custom role"}{" "}
+                              ? "Default persona"
+                              : "Custom persona"}{" "}
                             ·{" "}
                             {r.trainingReady
                               ? "Voice ready"
@@ -728,7 +742,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       </div>
                       <button onClick={() => setRoleEditor(r)}>
                         <Pencil size={14} />
-                        Edit role
+                        Edit persona
                       </button>
                     </div>
                     <p className="description">{r.description}</p>
@@ -761,7 +775,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
               <section className="settings-body">
                 <h2>Connected apps</h2>
                 <p className="sub spaced">
-                  Connect once. Every role is included unless you add an
+                  Connect once. Every persona is included unless you add an
                   exception.
                 </p>
                 {state.connections.map((c) => (
@@ -876,7 +890,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 <p className="sub spaced">
                   {state.mode === "demo"
                     ? "Exploring sample data. No email or Slack account is connected."
-                    : "Using a local snapshot. Draft text and role changes stay on this device."}
+                    : "Using a local snapshot. Draft text and persona changes stay on this device."}
                 </p>
                 <div className="row spaced">
                   <button onClick={() => importRef.current?.click()}>
@@ -910,6 +924,16 @@ function Dashboard({ initial }: { initial: Workspace }) {
           )}
         </main>
       </div>
+      {composing && <ComposeMessage
+        personas={state.roles}
+        initialApp={app === "all" ? "gmail" : app}
+        onClose={() => setComposing(false)}
+        onSave={(draft) => {
+          setState(s => parseWorkspace({...s, drafts: [draft, ...s.drafts]}));
+          setApp(draft.appId); setDraftId(draft.id); setQuery(""); setComposing(false);
+          setNotice("New message drafted locally. Review its details, then copy it into your app.");
+        }}
+      />}
       {roleEditor && (
         <RoleEditor
           key={roleEditor === "new" ? "new" : roleEditor.id}

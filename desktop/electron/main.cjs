@@ -5,6 +5,7 @@ const {
   shell,
   Menu,
   dialog,
+  clipboard,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
@@ -95,6 +96,22 @@ app.whenReady().then(() => {
       return JSON.parse(await fs.readFile(stateFile(), "utf8"));
     },
     saveWorkspace: writeWorkspace,
+  });
+  require("./compose.cjs").registerCompose({
+    app, ipcMain, dialog, trusted, getWindow: () => window,
+    getWorkspace: async () => {
+      await pendingWrite;
+      return JSON.parse(await fs.readFile(stateFile(), "utf8"));
+    },
+  });
+  ipcMain.handle("draft:copy", async (event, id) => {
+    trusted(event);
+    await pendingWrite;
+    const workspace = JSON.parse(await fs.readFile(stateFile(), "utf8"));
+    const draft = workspace.drafts.find((item) => item.id === id);
+    if (!draft || typeof draft.body !== "string" || draft.body.length > 60000)
+      throw new Error("Draft is unavailable. Reopen it before copying.");
+    clipboard.writeText(draft.body);
   });
   ipcMain.handle("workspace:load", async (event) => {
     trusted(event);

@@ -29,22 +29,12 @@ export function sampleWorkspace(): Workspace {
         usableExamples: 412,
         trainingReady: true,
       },
-      {
-        id: "academic",
-        name: "Academic",
-        description:
-          "Considerate, precise writing for professors, coursework and research.",
-        kind: "default",
-        excludedApps: [],
-        usableExamples: 218,
-        trainingReady: true,
-      },
     ],
     drafts: [
       {
         id: "office",
         appId: "gmail",
-        roleId: "academic",
+        roleId: "professional",
         subject: "Re: Office hours this week",
         recipient: "Professor Chen",
         address: "professor.chen@university.example",

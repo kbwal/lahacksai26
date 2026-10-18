@@ -27,7 +27,7 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 
 - Left navigation filters drafts by All apps, Gmail, Slack or Outlook, with consistent app colors. Inbox search matches people, addresses, message/context text, roles and app names within the selected app. Empty results have a clear-search action.
 - App headers show only the roles allowed for that app.
-- Roles are based on relationships, not platforms. Professional, Social and Academic are defaults.
+- Roles are based on relationships, not platforms. Professional and Social are defaults.
 - New roles allow every app. Existing roles can opt out of individual apps.
 - Existing drafts remain visible after a role excludes their app.
 - Draft previews display the role, incoming context, text and unresolved placeholders.
@@ -93,3 +93,11 @@ Only app-owned, published Gmail drafts are listed for sending. **Send** opens a 
 A durable SQLite journal claims each draft before the provider call. Sends are never automatically retried; timeout, server error or incomplete acknowledgement remains uncertain and blocks replay even after restarting the app. A definitive rejecting response permits a later explicit retry. The UI removes a draft only after Gmail acknowledges delivery. Successful sends record the final text for infra's existing feedback pipeline. Scheduled generation continues to create drafts only and never calls the desktop send path.
 
 Tests use fake Gmail clients and isolated databases; they do not read credentials or send real mail. Live OAuth/send testing requires an explicitly reviewed real message. Browser preview and sample data show the send control disabled; use the Mac app with an existing Gmail connection for delivery.
+
+## New messages and personas
+
+Professional and Social are the default personas. Loading an older workspace removes the Academic default and assigns its drafts to Professional (or the first remaining persona), preserving the messages. Custom personas remain supported. Serialized `roles` and `roleId` keys are retained for compatibility with existing snapshots and the infra branch.
+
+**Draft a message** opens an app selector, allowed-persona selector, optional recipient/subject, and message prompt. The native app asks for a local instruct model folder on first use (choose `models/Qwen3.5-2B`, not `Qwen3.5-2B-Base`). This choice is saved on the device; the composer can choose another model later. Generation runs through the bundled MLX worker using the shared model lock, without accessing Gmail or sending anything. It uses the persona description for style; trained adapters are not yet connected to this composer.
+
+New-message drafts persist in the inbox and survive Gmail refresh. Fill any highlighted details and use **Copy draft** to move the text into the destination app. Sending new messages from Margin is not connected; the existing Send action is for owned Gmail reply drafts only. The browser preview displays the composer but local generation requires the Mac app.

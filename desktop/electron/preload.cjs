@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("margin", {
+  copyDraft: (id) => ipcRenderer.invoke("draft:copy", id),
+  composeMessage: (request) => ipcRenderer.invoke("compose:generate", request),
   gmailAccounts: () => ipcRenderer.invoke("gmail:accounts"),
   chooseGmailConnection: () => ipcRenderer.invoke("gmail:chooseConnection"),
   gmailInbox: (account) => ipcRenderer.invoke("gmail:inbox", account),
