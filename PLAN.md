@@ -64,13 +64,13 @@ work. Gmail remains the only native draft integration.
 
 1. **Ingest:** the Gmail worker imports historical messages and periodic changes into SQLite, preserving Gmail thread IDs and the `SENT` label. Takeout remains an optional import path; its sent labels and thread IDs must be normalized before merging with API data.
 2. **Filter:** drop messages with `List-Unsubscribe`, `Precedence: bulk|list`, `Auto-Submitted`, or a `noreply` sender.
-3. **Clean:** `email-reply-parser` strips quoted text. Signatures are found by taking the user's most common trailing block of lines and stripping it.
-4. **Relationships:** heuristics give a first guess, then the user labels their top ~30 contacts in the UI. Everyone else is `unknown`.
+3. **Clean:** the Gmail exporter strips common quoted tails, quoted lines and standard signature delimiters. Unusual formats still need review.
+4. **Personas:** the exporter explicitly assigns an adapter name; local `train.augment --relabel` can label mixed history as professional/social. Review labels before training.
 5. **Mask ("me" messages only):**
    - regex for `[LINK] [PHONE] [AMOUNT] [TIME] [DATE]`
    - spaCy for `[ADDRESS]` and any dates the regex missed
    - unit-tested
-6. **Build:** each conversation, on any channel, becomes one JSONL record: `{"adapter_name", "type"?, "prompt"?, "conversation": [{"from": "me"|"them", "text"}]}`, oldest message first. There's no recipient, subject or channel metadata. The newest ~10–30% are marked `"type": "test"`.
+6. **Build:** each conversation, on any channel, becomes one JSONL record: `{"adapter_name", "type"?, "prompt"?, "conversation": [{"from": "me"|"them", "text"}]}`, oldest message first. The source label and scoped provenance remain attached to each record. The newest ~10–30% are marked `"type": "test"`.
    - **Augment:** [train/augment.py](train/augment.py) has the instruct model write a `prompt` for each conversation that starts with "me" (e.g. "email my professor asking to meet next week"). That teaches the adapters to compose new messages from a request, not just reply.
 7. **Triage:** received, non-automated messages that the user never replied to become a label for a logistic-regression model. The UI shows it only as "likely no reply needed".
 
@@ -101,7 +101,7 @@ Historical data preparation and the Gmail worker implementation can proceed in p
 
 ## 7. Setup
 
-The Gmail worker is implemented on the `infra` branch. Follow [GMAIL_SETUP.md](GMAIL_SETUP.md) for Google Cloud setup, OAuth, import, scheduled drafting, and live verification. Cleaning, masking, dataset construction, and feedback-driven training remain separate milestones.
+The Gmail worker is implemented on the `infra` branch. Follow [GMAIL_SETUP.md](GMAIL_SETUP.md) for Google Cloud setup, OAuth, import, scheduled drafting, and live verification. The local cache and sent feedback feed the conversation trainer through [TRAINING_DATA.md](TRAINING_DATA.md). Model quality and desktop training controls remain separate work.
 
 ```bash
 uv sync                          # Python 3.12 (MLX lags behind the system 3.15)

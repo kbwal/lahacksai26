@@ -85,8 +85,12 @@ def now_ms():
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, *, readonly=False):
         self.path = Path(path).resolve()
+        if readonly:
+            self.db = sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True, timeout=30)
+            self.db.row_factory = sqlite3.Row
+            return
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(self.path, timeout=30)
         self.path.chmod(0o600)
