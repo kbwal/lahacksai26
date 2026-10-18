@@ -31,7 +31,7 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 - New roles allow every app. Existing roles can opt out of individual apps.
 - Existing drafts remain visible after a role excludes their app.
 - Draft previews display the role, incoming context, text and unresolved placeholders.
-- `[TIME]` opens an accessible date/time dialog with quick choices and a sentence preview. It replaces all time placeholders in that local draft, preserving other placeholders.
+- `[TIME]` opens an accessible date/time dialog with quick choices and a sentence preview. It replaces all time placeholders in that local draft, preserving other placeholders. Filled times remain clickable and can be corrected after reopening the app.
 - Settings persist automatic-drafting and edit-learning preferences. Preferences are not sent to a backend yet.
 - Roles, preferences and local draft changes persist across restarts. Native files are saved atomically, with the previous file retained as `workspace.json.bak`.
 - Draft buttons open supplied official app URLs, or the app's drafts/home page when no exact link exists.
@@ -75,3 +75,9 @@ For automatic drafting, an integration should honor both the connected account a
 Electron saves to its `app.getPath('userData')/workspace.json` (normally `~/Library/Application Support/Margin/workspace.json`). Browser preview uses origin-local storage. Snapshot data is not uploaded. Account tokens are not collected or persisted by this UI.
 
 The native shell uses context isolation, renderer sandboxing, disabled Node integration, fixed IPC methods, main-frame sender checks, a restrictive CSP, denied permissions and an external URL allowlist. External content never loads inside the privileged app window.
+
+### Optional local time-edit metadata
+
+`Draft.timeEdit` keeps `{ template, choice: { date, time }, rendered }` so a locally inserted time can be changed without replacing unrelated times in the message. Snapshot validation checks it against `body`. If an integration changes the body, it must remove or regenerate this metadata. Older snapshots without it remain supported.
+
+Role forms reject blank names/descriptions and duplicate names (ignoring case and surrounding spaces). Modal dialogs focus the relevant input when opened.

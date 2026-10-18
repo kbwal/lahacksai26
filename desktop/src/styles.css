@@ -678,3 +678,10 @@ input[type="checkbox"] {
     padding: 10px 18px;
   }
 }
+
+.time-token.filled {
+  color: var(--accent);
+}
+.field [aria-invalid="true"] {
+  border-color: var(--error);
+}

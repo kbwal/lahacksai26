@@ -380,28 +380,38 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       </p>
                     )}
                     <div className="draft-body">
-                      {activeDraft.body.split("[TIME]").map((text, i) => (
-                        <span key={i}>
-                          {i > 0 && (
-                            <TimeToken
-                              onClick={() => setTimeDraft(activeDraft)}
-                            />
-                          )}
-                          {text}
-                        </span>
-                      ))}
+                      {(activeDraft.timeEdit?.template ?? activeDraft.body)
+                        .split("[TIME]")
+                        .map((text, i) => (
+                          <span key={i}>
+                            {i > 0 && (
+                              <TimeToken
+                                label={activeDraft.timeEdit?.rendered}
+                                onClick={() => setTimeDraft(activeDraft)}
+                              />
+                            )}
+                            {text}
+                          </span>
+                        ))}
                     </div>
-                    {activeDraft.body.includes("[TIME]") && (
+                    {(activeDraft.body.includes("[TIME]") ||
+                      activeDraft.timeEdit) && (
                       <div className="time-prompt">
                         <div>
-                          <h3>One detail to fill</h3>
+                          <h3>
+                            {activeDraft.timeEdit
+                              ? "Time inserted"
+                              : "One detail to fill"}
+                          </h3>
                           <p className="sub">
-                            Choose the time you want in your reply.
+                            {activeDraft.timeEdit
+                              ? "You can change this time before opening the original app."
+                              : "Choose the time you want in your reply."}
                           </p>
                         </div>
                         <button onClick={() => setTimeDraft(activeDraft)}>
                           <Clock3 size={16} />
-                          Insert time
+                          {activeDraft.timeEdit ? "Change time" : "Insert time"}
                         </button>
                       </div>
                     )}
@@ -665,6 +675,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
           key={roleEditor === "new" ? "new" : roleEditor.id}
           role={roleEditor === "new" ? undefined : roleEditor}
           connections={state.connections}
+          roles={state.roles}
           onClose={() => setRoleEditor(null)}
           onSave={saveRole}
         />

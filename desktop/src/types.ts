@@ -26,6 +26,7 @@ export interface Draft {
   updatedAt: string;
   externalUrl?: string;
   localChanges?: boolean;
+  timeEdit?: { template: string; choice: TimeChoice; rendered: string };
 }
 export interface Workspace {
   version: 1;

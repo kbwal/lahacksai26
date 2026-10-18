@@ -12,8 +12,8 @@ export default function TimePicker({
   onInsert(choice: TimeChoice): void;
   onClose(): void;
 }) {
-  const [time, setTime] = useState("14:00"),
-    [date, setDate] = useState(""),
+  const [time, setTime] = useState(draft.timeEdit?.choice.time || "14:00"),
+    [date, setDate] = useState(draft.timeEdit?.choice.date || ""),
     [error, setError] = useState("");
   let label = "";
   try {
@@ -31,10 +31,14 @@ export default function TimePicker({
     }
   }
   return (
-    <Modal title="Choose a time" onClose={onClose}>
+    <Modal
+      title={draft.timeEdit ? "Change the time" : "Choose a time"}
+      onClose={onClose}
+    >
       <form onSubmit={submit}>
         <p className="sub spaced">
-          Replace [TIME] in your reply to {draft.recipient}.
+          {draft.timeEdit ? "Update the time" : "Replace [TIME]"} in your reply
+          to {draft.recipient}.
         </p>
         <div className="time-fields">
           <label className="field">
@@ -48,7 +52,7 @@ export default function TimePicker({
           <label className="field">
             Time
             <input
-              autoFocus
+              data-initial-focus
               type="time"
               required
               value={time}
@@ -93,18 +97,31 @@ export default function TimePicker({
           </button>
           <button type="submit" className="primary" disabled={!label}>
             <Check size={16} />
-            Insert time
+            {draft.timeEdit ? "Update time" : "Insert time"}
           </button>
         </div>
       </form>
     </Modal>
   );
 }
-export function TimeToken({ onClick }: { onClick(): void }) {
+export function TimeToken({
+  onClick,
+  label,
+}: {
+  onClick(): void;
+  label?: string;
+}) {
   return (
-    <button type="button" className="time-token" onClick={onClick}>
+    <button
+      type="button"
+      className={`time-token${label ? " filled" : ""}`}
+      aria-label={
+        label ? `Change inserted time: ${label}` : "Choose a time for [TIME]"
+      }
+      onClick={onClick}
+    >
       <Clock3 size={14} />
-      [TIME]
+      {label || "[TIME]"}
     </button>
   );
 }

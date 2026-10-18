@@ -58,13 +58,44 @@ export function formatTime({ date, time }: TimeChoice): string {
   return `${day.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })} at ${clock}`;
 }
 export function fillTime(draft: Draft, choice: TimeChoice): Draft {
-  if (!draft.body.includes("[TIME]"))
+  const template = draft.timeEdit?.template ?? draft.body;
+  if (!template.includes("[TIME]"))
     throw new Error("This draft has no [TIME] placeholder.");
+  if (
+    draft.timeEdit &&
+    template.replaceAll("[TIME]", draft.timeEdit.rendered) !== draft.body
+  )
+    throw new Error(
+      "This draft changed since its time was inserted. Refresh it before editing the time.",
+    );
+  const rendered = formatTime(choice);
   return {
     ...draft,
-    body: draft.body.replaceAll("[TIME]", formatTime(choice)),
+    body: template.replaceAll("[TIME]", rendered),
+    timeEdit: { template, choice: { ...choice }, rendered },
     localChanges: true,
   };
+}
+export function roleFormErrors(
+  name: string,
+  description: string,
+  roles: Persona[],
+  editingId?: string,
+): { name?: string; description?: string } {
+  const errors: { name?: string; description?: string } = {};
+  if (!name.trim()) errors.name = "Enter a role name.";
+  else if (
+    roles.some(
+      (r) =>
+        r.id !== editingId &&
+        r.name.trim().toLocaleLowerCase() === name.trim().toLocaleLowerCase(),
+    )
+  )
+    errors.name =
+      "A role with this name already exists. Choose a different name.";
+  if (!description.trim())
+    errors.description = "Describe when to use this voice.";
+  return errors;
 }
 function object(v: unknown): Record<string, unknown> {
   if (!v || typeof v !== "object" || Array.isArray(v))
@@ -143,6 +174,26 @@ export function parseWorkspace(input: unknown): Workspace {
       throw new Error(
         "Draft link must be an official Gmail, Slack or Outlook HTTPS URL.",
       );
+    const body = str(d.body, "draft body", 60000);
+    let timeEdit: Draft["timeEdit"];
+    if (d.timeEdit !== undefined) {
+      const edit = object(d.timeEdit),
+        choice = object(edit.choice);
+      timeEdit = {
+        template: str(edit.template, "time template", 60000),
+        rendered: str(edit.rendered, "inserted time", 200),
+        choice: {
+          date: str(choice.date, "time date", 10),
+          time: str(choice.time, "time value", 5),
+        },
+      };
+      if (
+        !timeEdit.template.includes("[TIME]") ||
+        formatTime(timeEdit.choice) !== timeEdit.rendered ||
+        timeEdit.template.replaceAll("[TIME]", timeEdit.rendered) !== body
+      )
+        throw new Error("Invalid inserted time metadata.");
+    }
     return {
       id,
       roleId,
@@ -151,7 +202,8 @@ export function parseWorkspace(input: unknown): Workspace {
       recipient: str(d.recipient, "recipient", 500),
       address: str(d.address, "address", 1000),
       context: str(d.context, "context", 10000),
-      body: str(d.body, "draft body", 60000),
+      body,
+      timeEdit,
       updatedAt: str(d.updatedAt, "timestamp", 100),
       externalUrl,
       localChanges: d.localChanges === undefined ? false : bool(d.localChanges),

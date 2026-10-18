@@ -7,6 +7,7 @@ import {
   isAllowedExternalUrl,
   parseWorkspace,
   placeholders,
+  roleFormErrors,
 } from "../src/lib/domain";
 import { sampleWorkspace } from "../src/lib/sample";
 const require = createRequire(import.meta.url);
@@ -46,6 +47,22 @@ describe("placeholder handling", () => {
   });
 });
 describe("role policy", () => {
+  it("reports blank fields and duplicate names without rejecting an unchanged role", () => {
+    const roles = sampleWorkspace().roles;
+    expect(roleFormErrors("   ", "   ", roles)).toEqual({
+      name: "Enter a role name.",
+      description: "Describe when to use this voice.",
+    });
+    expect(roleFormErrors(" professional ", "Clients", roles).name).toContain(
+      "already exists",
+    );
+    expect(
+      roleFormErrors("Professional", roles[0].description, roles, roles[0].id),
+    ).toEqual({});
+    expect(
+      roleFormErrors("Community", "Volunteer coordination", roles),
+    ).toEqual({});
+  });
   it("uses all apps by default and applies exclusions independently per role", () => {
     const roles = sampleWorkspace().roles;
     expect(allowedRoles(roles, "outlook")).toHaveLength(3);
@@ -59,6 +76,28 @@ describe("role policy", () => {
   });
 });
 describe("import boundary", () => {
+  it("keeps inserted times editable after saving and reopening a workspace", () => {
+    const data = sampleWorkspace();
+    data.drafts[0].body =
+      "The old meeting was at 9:00 AM. Meet at [TIME] on [DATE].";
+    data.drafts[0] = fillTime(data.drafts[0], { time: "09:00", date: "" });
+    const reopened = parseWorkspace(JSON.parse(JSON.stringify(data)));
+    const changed = fillTime(reopened.drafts[0], { time: "16:30", date: "" });
+    expect(changed.body).toBe(
+      "The old meeting was at 9:00 AM. Meet at 4:30 PM on [DATE].",
+    );
+    expect(changed.timeEdit?.choice.time).toBe("16:30");
+    expect(placeholders(changed.body)).toEqual(["[DATE]"]);
+  });
+  it("rejects stale time metadata instead of overwriting a draft changed elsewhere", () => {
+    const data = sampleWorkspace();
+    data.drafts[0] = fillTime(data.drafts[0], { time: "14:00", date: "" });
+    data.drafts[0].body += " A new sentence.";
+    expect(() => fillTime(data.drafts[0], { time: "16:30", date: "" })).toThrow(
+      "changed since",
+    );
+    expect(() => parseWorkspace(data)).toThrow("time metadata");
+  });
   it("round-trips a valid snapshot without inventing training readiness", () => {
     const data = sampleWorkspace();
     data.roles[0].usableExamples = 3;

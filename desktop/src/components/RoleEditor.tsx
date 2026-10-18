@@ -1,24 +1,38 @@
-import { useState, type FormEvent } from "react";
+import { useId, useRef, useState, type FormEvent } from "react";
 import { Layers } from "lucide-react";
 import type { AppConnection, AppId, Persona } from "../types";
 import Modal from "./Modal";
+import { roleFormErrors } from "../lib/domain";
 export default function RoleEditor({
   role,
   connections,
+  roles,
   onSave,
   onClose,
 }: {
   role?: Persona;
   connections: AppConnection[];
+  roles: Persona[];
   onSave(role: Persona): void;
   onClose(): void;
 }) {
   const [name, setName] = useState(role?.name || "");
   const [description, setDescription] = useState(role?.description || "");
   const [excluded, setExcluded] = useState<AppId[]>(role?.excludedApps || []);
+  const [errors, setErrors] = useState<{ name?: string; description?: string }>(
+    {},
+  );
+  const nameInput = useRef<HTMLInputElement>(null),
+    descriptionInput = useRef<HTMLTextAreaElement>(null),
+    id = useId();
   function submit(e: FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !description.trim()) return;
+    const validation = roleFormErrors(name, description, roles, role?.id);
+    setErrors(validation);
+    if (validation.name || validation.description) {
+      (validation.name ? nameInput.current : descriptionInput.current)?.focus();
+      return;
+    }
     onSave({
       id: role?.id || crypto.randomUUID(),
       kind: role?.kind || "custom",
@@ -31,29 +45,53 @@ export default function RoleEditor({
   }
   return (
     <Modal title={role ? `Edit ${role.name}` : "Add a role"} onClose={onClose}>
-      <form onSubmit={submit}>
+      <form onSubmit={submit} noValidate>
         <label className="field">
           Role name
           <input
-            autoFocus
+            ref={nameInput}
+            data-initial-focus
             required
+            aria-invalid={!!errors.name}
+            aria-describedby={errors.name ? `${id}-name-error` : undefined}
             maxLength={50}
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              setErrors((current) => ({ ...current, name: undefined }));
+            }}
             placeholder="e.g. Community organizer"
           />
         </label>
+        {errors.name && (
+          <p id={`${id}-name-error`} className="error" role="alert">
+            {errors.name}
+          </p>
+        )}
         <label className="field">
           When to use this voice
           <textarea
+            ref={descriptionInput}
             required
+            aria-invalid={!!errors.description}
+            aria-describedby={
+              errors.description ? `${id}-description-error` : undefined
+            }
             maxLength={300}
             rows={3}
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => {
+              setDescription(e.target.value);
+              setErrors((current) => ({ ...current, description: undefined }));
+            }}
             placeholder="Organizing events and keeping volunteers updated"
           />
         </label>
+        {errors.description && (
+          <p id={`${id}-description-error`} className="error" role="alert">
+            {errors.description}
+          </p>
+        )}
         {role ? (
           <>
             <h3>App exceptions</h3>
