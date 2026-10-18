@@ -5,6 +5,7 @@ A personal writing assistant that learns different voices for professional, soci
 - [Product specification](PROJECT.md)
 - [Model and infrastructure plan](PLAN.md)
 - [Desktop dashboard setup and integration contract](desktop/README.md)
+- [Gmail history and feedback to persona training](TRAINING_DATA.md)
 
 ## Dashboard
 
