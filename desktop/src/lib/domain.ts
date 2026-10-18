@@ -7,16 +7,18 @@ import type {
   PlaceholderEdits,
   PersonalDetails,
 } from "../types";
-export const APP_IDS: AppId[] = ["gmail", "slack", "outlook"];
-export const APP_NAMES = { gmail: "Gmail", slack: "Slack", outlook: "Outlook" };
+export const APP_IDS: AppId[] = ["gmail", "slack", "discord", "outlook"];
+export const APP_NAMES = { gmail: "Gmail", slack: "Slack", discord: "Discord", outlook: "Outlook" };
 export const APP_LINKS = {
   gmail: "https://mail.google.com/mail/u/0/#drafts",
   slack: "https://app.slack.com",
+  discord: "https://discord.com/channels/@me",
   outlook: "https://outlook.live.com/mail/0/drafts",
 };
 const HOSTS = [
   "mail.google.com",
   "app.slack.com",
+  "discord.com",
   "outlook.live.com",
   "outlook.office.com",
   "outlook.office365.com",
@@ -321,14 +323,17 @@ export function parseWorkspace(input: unknown): Workspace {
   const w = object(input);
   if (w.version !== 1 || !["demo", "local"].includes(w.mode as string))
     throw new Error("Unsupported workspace format.");
-  const connections = array(w.connections, 3).map((v) => {
+  const connections = array(w.connections, 4).map((v) => {
     const a = object(v),
       id = appId(a.id);
     return { id, name: APP_NAMES[id], connected: bool(a.connected) };
   });
   unique(connections);
-  if (connections.length !== 3)
-    throw new Error("Include Gmail, Slack and Outlook connection records.");
+  if (!connections.some(c => c.id === "discord"))
+    connections.push({ id: "discord", name: "Discord", connected: false });
+  if (connections.length !== 4)
+    throw new Error("Include Gmail, Slack, Discord and Outlook connection records.");
+  connections.sort((a, b) => APP_IDS.indexOf(a.id) - APP_IDS.indexOf(b.id));
   const roles = array(w.roles, 30).map((v) => {
     const r = object(v),
       id = str(r.id, "role ID", 100),
@@ -346,7 +351,7 @@ export function parseWorkspace(input: unknown): Workspace {
       name,
       description: str(r.description, "description", 300),
       kind: r.kind as Persona["kind"],
-      excludedApps: [...new Set(array(r.excludedApps, 3).map(appId))],
+      excludedApps: [...new Set(array(r.excludedApps, 4).map(appId))],
       usableExamples: r.usableExamples as number,
       trainingReady: bool(r.trainingReady),
     };
@@ -370,7 +375,7 @@ export function parseWorkspace(input: unknown): Workspace {
         : str(d.externalUrl, "draft link", 4000);
     if (externalUrl && !isAllowedExternalUrl(externalUrl))
       throw new Error(
-        "Draft link must be an official Gmail, Slack or Outlook HTTPS URL.",
+        "Draft link must be an official Gmail, Slack, Discord or Outlook HTTPS URL.",
       );
     const rawBody = str(d.body, "draft body", 60000);
     const body = d.composed === true && !d.placeholderEdits ? normalizeComposedBody(rawBody) : rawBody;
@@ -442,10 +447,32 @@ export function parseWorkspace(input: unknown): Workspace {
       )
         throw new Error("Invalid Gmail delivery metadata.");
     }
+    let chat: Draft["chat"];
+    if (d.chat !== undefined) {
+      const ref = object(d.chat);
+      if (!["slack", "discord"].includes(ref.source as string) || ref.source !== d.appId)
+        throw new Error("Invalid chat source.");
+      chat = {
+        source: ref.source as "slack" | "discord",
+        accountId: str(ref.accountId, "chat account", 320),
+        workspaceId: str(ref.workspaceId, "chat workspace", 320),
+        channelId: str(ref.channelId, "chat channel", 320),
+        threadId: str(ref.threadId, "chat thread", 320),
+        suggestionId: ref.suggestionId as number,
+        stale: ref.stale === undefined ? false : bool(ref.stale),
+      };
+      if (!chat.accountId || !chat.workspaceId || !chat.channelId || !chat.threadId ||
+          !Number.isSafeInteger(chat.suggestionId) || chat.suggestionId < 1 || d.composed === true)
+        throw new Error("Invalid chat suggestion metadata.");
+    }
+    if (d.source !== undefined && (d.source !== d.appId || d.source === "outlook"))
+      throw new Error("Draft source does not match its app.");
     return {
       id,
       roleId,
       delivery,
+      chat,
+      source: d.appId === "outlook" ? undefined : appId(d.appId) as Draft["source"],
       appId: appId(d.appId),
       subject: str(d.subject, "subject", 1000),
       recipient: str(d.recipient, "recipient", 500),

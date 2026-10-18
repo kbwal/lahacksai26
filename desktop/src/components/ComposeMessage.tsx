@@ -72,7 +72,7 @@ export default function ComposeMessage({personas, initialApp, onClose, onSave}: 
         </div>
       </div>
       <details className="compose-options"><summary><SlidersHorizontalIcon size={15} />Message details <span className="sub">Optional</span></summary><fieldset disabled={busy} className="compose-fields">
-        <label className="field">To<input maxLength={320} value={recipient} onChange={e => setRecipient(e.target.value)} placeholder={appId === "slack" ? "Person or channel" : "Name or email address"} /></label>
+        <label className="field">To<input maxLength={320} value={recipient} onChange={e => setRecipient(e.target.value)} placeholder={(appId === "slack" || appId === "discord") ? "Person or channel" : "Name or email address"} /></label>
         <label className="field">Subject<input maxLength={300} value={subject} onChange={e => setSubject(e.target.value)} placeholder="What’s this about?" /></label>
         <label className="row spaced"><input type="checkbox" checked={changeModel} onChange={e => setChangeModel(e.target.checked)} />Choose a different local model</label>
       </fieldset></details>

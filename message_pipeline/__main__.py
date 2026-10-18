@@ -30,6 +30,8 @@ def parser():
     result.add_argument("--account", help="Slack user ID, Discord human user ID, or Gmail address")
     result.add_argument("--workspace", default="", help="Slack team ID or Discord server ID")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("connections", help="List saved connections and sync status without credentials")
+    commands.add_parser("inbox", help="Read ready suggestions for the desktop app")
     connect = commands.add_parser(
         "connect", help="Validate an existing app token; save in Keychain"
     )
@@ -165,6 +167,10 @@ def main(argv=None):
             store = Store(args.db)
             if args.command == "connect":
                 result = connect(store, args)
+            elif args.command == "connections":
+                from message_pipeline.desktop import connections
+
+                result = connections(store, args.source)
             else:
                 if not args.account or not args.workspace:
                     raise ValueError("Use --account and --workspace from the connect result")
@@ -172,6 +178,10 @@ def main(argv=None):
                 connection = store.connection(key)
                 if args.command == "status":
                     result = store.status(key)
+                elif args.command == "inbox":
+                    from message_pipeline.desktop import inbox
+
+                    result = inbox(store, key)
                 elif args.command == "suggest":
                     result = suggest_replies(store, args, key)
                     result["suggestions"] = [

@@ -22,19 +22,19 @@ function runWorker(executable, args, input) {
       child.kill();
       finish(
         new Error(
-          "The Gmail worker timed out. Check Gmail before retrying a send.",
+          "The local worker timed out. Check the original app before retrying a send.",
         ),
       );
     }, 300000);
     child.on("error", () =>
-      finish(new Error("The Gmail worker could not start.")),
+      finish(new Error("The local worker could not start.")),
     );
     child.stdin.on("error", () => {});
     child.stdout.on("data", (data) => {
       output += data;
       if (Buffer.byteLength(output) > 16 * 1024 * 1024) {
         child.kill();
-        finish(new Error("The Gmail inbox is too large."));
+        finish(new Error("The local inbox is too large."));
       }
     });
     child.stderr.on("data", (data) => {
@@ -48,17 +48,29 @@ function runWorker(executable, args, input) {
               .split("\n")
               .find((line) => line.startsWith("Error: "))
               ?.slice(7) ||
-              "Gmail could not complete this request. Reconnect or refresh your inbox.",
+              "The local worker could not complete this request. Check your connection and refresh.",
           ),
         );
       try {
         finish(null, JSON.parse(output));
       } catch {
-        finish(new Error("The Gmail worker returned an invalid response."));
+        finish(new Error("The local worker returned an invalid response."));
       }
     });
     child.stdin.end(input ? JSON.stringify(input) : "");
   });
+}
+
+function runSidecar(app, args, input) {
+  const root = path.resolve(__dirname, "..", "..");
+  const executable = app.isPackaged
+    ? path.join(process.resourcesPath, "lahacks-mail-worker", "lahacks-mail-worker")
+    : path.join(root, "build", "macos-venv", "bin", "python");
+  if (!existsSync(executable))
+    throw new Error("The local worker is not installed. Build the mail sidecar first.");
+  return runWorker(executable, app.isPackaged ? args : [
+    path.join(root, "desktop", "electron", "mail-entry.py"), ...args,
+  ], input);
 }
 
 function createWorkerClient(app) {
@@ -75,19 +87,8 @@ function createWorkerClient(app) {
     }
     if (db && !path.isAbsolute(db))
       throw new Error("The Gmail database path must be absolute.");
-    const bundled = path.join(
-      process.resourcesPath,
-      "lahacks-mail-worker",
-      "lahacks-mail-worker",
-    );
     const root = path.resolve(__dirname, "..", "..");
-    const python = path.join(root, "build", "macos-venv", "bin", "python");
-    const executable = app.isPackaged ? bundled : python;
-    if (!existsSync(executable))
-      throw new Error(
-        "The Gmail worker is not installed. Build the mail sidecar first.",
-      );
-    const args = app.isPackaged ? [] : ["-m", "gmail_agent"];
+    const args = [];
     // A development worker's default paths are relative to cwd; always resolve them here.
     if (!db && !app.isPackaged) db = path.join(root, "data", "mail.db");
     if (db) args.push("--db", db);
@@ -101,21 +102,7 @@ function createWorkerClient(app) {
       args.push("--account", account);
     }
     args.push(command);
-    // Development imports need an explicit module path; packaged sidecars are self contained.
-    if (!app.isPackaged) {
-      return new Promise((resolve, reject) => {
-        // Use the same runner with a fixed absolute Python entry, without global environment changes.
-        runWorker(
-          executable,
-          [
-            path.join(root, "desktop", "electron", "mail-entry.py"),
-            ...args.slice(2),
-          ],
-          input,
-        ).then(resolve, reject);
-      });
-    }
-    return runWorker(executable, args, input);
+    return runSidecar(app, args, input);
   }
   return invoke;
 }
@@ -222,4 +209,4 @@ function registerMail({
     }
   });
 }
-module.exports = { registerMail, runWorker, createWorkerClient };
+module.exports = { registerMail, runWorker, runSidecar, createWorkerClient };

@@ -1,6 +1,7 @@
 const hosts = new Set([
   "mail.google.com",
   "app.slack.com",
+  "discord.com",
   "outlook.live.com",
   "outlook.office.com",
   "outlook.office365.com",

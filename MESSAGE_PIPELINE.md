@@ -255,14 +255,17 @@ Automated tests use synthetic provider responses for pagination, restart recover
 429 backoff, channel/account isolation, source labels, text edits and export permissions.
 Regression coverage includes isolated channel/model failures, disconnect shutdown, channel
 selection migration, incremental Discord cursor recovery, and bounded context reads.
-All 146 repository tests pass. The rebuilt, relocated macOS executable also generated
+The rebuilt, relocated macOS executable also generated
 real local Qwen3.5-2B suggestions for synthetic Slack and Discord conversations, preserving
 the source label in each suggestion and its context.
 No live Slack workspace or Discord server has been connected or imported in this change.
 End-to-end credential and permission checks need authorized app installations. Local
 suggestion generation and conversation-based human reply observation are implemented and
-tested with synthetic fixtures. The desktop review/copy UI, native provider draft surfaces,
-event subscriptions and production OAuth onboarding remain application work.
+tested with synthetic fixtures. The desktop now loads suggestions through credential-free
+`connections` and `inbox` CLI commands, with source labels and scoped conversation IDs.
+It supports manual sync/generation, local detail edits, and review/copy/open actions; see
+[`desktop/README.md`](desktop/README.md#slack-and-discord-inboxes). Native provider draft
+surfaces, event subscriptions and production OAuth onboarding remain application work.
 
 ## Provider references
 

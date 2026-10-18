@@ -85,6 +85,9 @@ function createWindow() {
 }
 app.setName("Margin");
 app.whenReady().then(() => {
+  require("./messages.cjs").registerMessages({
+    app, ipcMain, dialog, trusted, getWindow: () => window,
+  });
   require("./mail.cjs").registerMail({
     app,
     ipcMain,

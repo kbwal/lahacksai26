@@ -318,6 +318,10 @@ small {
   --app-color: light-dark(#196eb5, #83b9ee);
   --app-tint: light-dark(#e8f2fb, #23303d);
 }
+[data-app="discord"] {
+  --app-color: light-dark(#5664b5, #a8b3f2);
+  --app-tint: light-dark(#edf0fc, #282e43);
+}
 .app-mark[data-app] {
   color: var(--app-color, var(--sub));
 }
@@ -999,6 +1003,17 @@ input[type="checkbox"] {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.chat-connection { padding: 20px 30px; border-bottom: 1px solid var(--border); }
+.settings-body .chat-connection { padding-inline: 0; }
+.chat-connection h2 { font-size: 15px; margin: 0; }
+.chat-connection > .sub { margin-top: 8px; }
+.chat-connection .field { max-width: 460px; margin-top: 14px; }
+.chat-controls { flex-wrap: wrap; gap: 8px; }
+.chat-progress { display: flex; align-items: center; gap: 12px; margin-top: 14px; font-size: 12px; color: var(--sub); }
+.chat-progress-line { width: 80px; height: 6px; border-radius: 3px; background: var(--border); animation: chat-loading 1.4s ease-in-out infinite alternate; }
+@keyframes chat-loading { to { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .chat-progress-line { animation: none; } }
+@media (max-width: 680px) { .chat-connection { padding-inline: 20px; } }
 .inbox-search {
   display: flex;
   align-items: center;

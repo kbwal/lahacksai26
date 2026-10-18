@@ -14,13 +14,15 @@ def payload():
     }
 
 
-def test_new_message_prompt_carries_persona_and_facts():
-    messages = compose_messages(payload())
+@pytest.mark.parametrize("app", ["gmail", "slack", "discord"])
+def test_new_message_prompt_carries_persona_and_facts(app):
+    messages = compose_messages({**payload(), "appId": app})
     assert "NEW outgoing message" in messages[0]["content"]
     assert "Professional" in messages[0]["content"]
     assert "Clear and concise" in messages[0]["content"]
     assert "Invite Alex" in messages[1]["content"]
     assert "[LINK]" in messages[1]["content"]
+    assert app in messages[1]["content"]
 
 
 @pytest.mark.parametrize(

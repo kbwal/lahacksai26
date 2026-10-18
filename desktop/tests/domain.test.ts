@@ -121,6 +121,7 @@ describe("external link boundary", () => {
   it.each([
     "https://mail.google.com/mail/u/0/#drafts",
     "https://app.slack.com/client/T/C",
+    "https://discord.com/channels/123/456/789",
     "https://outlook.office.com/mail/drafts",
   ])("allows official URL %s in native and renderer policies", (url) => {
     expect(isAllowedExternalUrl(url)).toBe(true);
@@ -131,6 +132,8 @@ describe("external link boundary", () => {
     "javascript:alert(1)",
     "http://mail.google.com",
     "https://mail.google.com.evil.test",
+    "https://discord.com.evil.test",
+    "https://user:secret@discord.com/channels/123",
     "https://evil.test@google.com",
     "https://user:secret@mail.google.com",
     "https://app.slack.com:9999/",
@@ -154,7 +157,7 @@ describe("inbox search", () => {
       searchDrafts(w.drafts, "professor.chen@university.example", w.roles),
     ).toHaveLength(1);
     expect(searchDrafts(w.drafts, "nonexistent", w.roles)).toEqual([]);
-    expect(searchDrafts(w.drafts, "   ", w.roles)).toHaveLength(5);
+    expect(searchDrafts(w.drafts, "   ", w.roles)).toEqual(w.drafts);
   });
   it("retains validated Gmail delivery metadata across saved snapshots", () => {
     const w = sampleWorkspace();

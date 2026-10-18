@@ -1,6 +1,7 @@
 import {
   EnvelopeSimpleIcon,
   SlackLogoIcon,
+  DiscordLogoIcon,
   StackIcon,
 } from "@phosphor-icons/react";
 import type { AppId } from "../types";
@@ -20,6 +21,8 @@ export default function AppMark({
         <StackIcon size={size} />
       ) : app === "slack" ? (
         <SlackLogoIcon size={size} />
+      ) : app === "discord" ? (
+        <DiscordLogoIcon size={size} />
       ) : app === "gmail" ? (
         <EnvelopeSimpleIcon size={size} />
       ) : (
