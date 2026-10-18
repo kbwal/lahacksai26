@@ -4,4 +4,18 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "mlx-lm>=0.32",
+    "google-auth-oauthlib>=1.2.2",
+    "keyring>=25.6",
+    "requests>=2.32",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.11"]
+packaging = ["pyinstaller>=6.22,<7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
