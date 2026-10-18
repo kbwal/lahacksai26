@@ -94,6 +94,7 @@ declare global {
       syncChat(source: ChatSource, account: string, workspace: string): Promise<ChatInbox | null>;
       copyDraft(id: string): Promise<void>;
       composeMessage(request: { appId: AppId; personaId: string; prompt: string; recipient: string; subject: string; changeModel: boolean }): Promise<{body: string} | null>;
+      compareMessage(request: { appId: AppId; personaId: string; prompt: string; changeModel: boolean }): Promise<{id: string | null; name: string; body: string; missing: boolean}[] | null>;
       gmailAccounts(): Promise<string[]>;
       chooseGmailConnection(): Promise<string[] | null>;
       gmailInbox(

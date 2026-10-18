@@ -1,9 +1,12 @@
 """Resumable backfill and transactional incremental mailbox synchronization."""
 
 import json
+import logging
 
 from gmail_agent.client import GmailError
 from gmail_agent.store import now_ms
+
+log = logging.getLogger(__name__)
 
 
 def backfill(store, client, account_id, *, query=None, max_pages=None, reset=False):
@@ -36,7 +39,7 @@ def backfill(store, client, account_id, *, query=None, max_pages=None, reset=Fal
                     "UPDATE accounts SET backfill_page=NULL WHERE account_id=?", (account_id,)
                 )
             continue
-        threads = {item["id"]: client.get_thread(item["id"]) for item in page.get("threads", [])}
+        threads = client.get_threads(item["id"] for item in page.get("threads", []))
         next_page = page.get("nextPageToken")
         with store.db:
             for thread_id, messages in threads.items():
@@ -55,6 +58,10 @@ def backfill(store, client, account_id, *, query=None, max_pages=None, reset=Fal
                     (account_id,),
                 )
         pages += 1
+        imported = store.db.execute(
+            "SELECT COUNT(*) FROM threads WHERE account_id=?", (account_id,)
+        ).fetchone()[0]
+        log.info("Imported page %s: %s threads stored so far", pages, imported)
         if not next_page:
             return True
     return False
@@ -121,7 +128,7 @@ def sync_mailbox(store, client, account_id):
         for thread_id in previous_drafts.keys() | current_drafts.keys()
         if previous_drafts.get(thread_id, set()) != current_drafts.get(thread_id, set())
     )
-    threads = {thread_id: client.get_thread(thread_id) for thread_id in sorted(affected)}
+    threads = client.get_threads(sorted(affected))
     if was_backfilling or store.account(account_id)["needs_reconcile"]:
         candidate_ids = {
             row[0]

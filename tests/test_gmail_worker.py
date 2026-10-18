@@ -86,6 +86,9 @@ class FakeGmail:
             key=lambda item: (item["internal_date"], item["id"]),
         )
 
+    def get_threads(self, thread_ids):
+        return {thread_id: self.get_thread(thread_id) for thread_id in thread_ids}
+
     def list_drafts(self):
         self.draft_list_reads += 1
         return [

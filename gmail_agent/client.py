@@ -3,6 +3,7 @@
 import base64
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from email import policy
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr
@@ -10,6 +11,8 @@ from html.parser import HTMLParser
 from urllib.parse import quote
 
 import requests
+
+from gmail_agent.text import unwrap
 
 log = logging.getLogger(__name__)
 
@@ -39,22 +42,42 @@ class PublishUncertain(RuntimeError):
     """A create request may have reached Gmail; never replay it automatically."""
 
 
+_BLOCKS = {"br", "p", "div", "li", "tr", "td", "table", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+
 class _HTMLText(HTMLParser):
+    """HTML to text, dropping quoted history (blockquote, Gmail/Outlook quote containers)."""
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.parts = []
-        self.hidden = 0
+        # Open tags inside a hidden region; hidden while non-empty.
+        self.hidden = []
 
     def handle_starttag(self, tag, attrs):
-        if tag in {"script", "style"}:
-            self.hidden += 1
-        elif tag in {"br", "p", "div", "li", "tr"}:
+        if self.hidden:
+            if tag not in {"br", "img", "hr", "meta", "link", "input", "wbr"}:
+                self.hidden.append(tag)
+            return
+        classes = (dict(attrs).get("class") or "").split()
+        ident = dict(attrs).get("id") or ""
+        if (
+            tag in {"script", "style", "title", "head", "blockquote"}
+            or {"gmail_quote", "gmail_extra", "yahoo_quoted"} & set(classes)
+            or ident in {"divRplyFwdMsg", "appendonsend"}
+        ):
+            self.hidden.append(tag)
+        elif tag in _BLOCKS:
             self.parts.append("\n")
 
     def handle_endtag(self, tag):
-        if tag in {"script", "style"}:
-            self.hidden = max(0, self.hidden - 1)
-        elif tag in {"p", "div", "li", "tr"}:
+        if self.hidden:
+            if tag in self.hidden:
+                # Close back to the matching tag; tolerates unclosed children.
+                while self.hidden and self.hidden.pop() != tag:
+                    pass
+            return
+        if tag in _BLOCKS:
             self.parts.append("\n")
 
     def handle_data(self, data):
@@ -83,21 +106,33 @@ def body_text(payload):
     if mime not in {"text/plain", "text/html"}:
         return ""
     headers = {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
-    content_type = EmailMessage()
-    content_type["Content-Type"] = headers.get("content-type", mime)
-    charset = content_type.get_content_charset() or "utf-8"
-    data = decode_data(payload.get("body", {}).get("data", ""))
+    try:
+        content_type = EmailMessage()
+        # Folded headers carry CR/LF, which EmailMessage rejects.
+        content_type["Content-Type"] = " ".join(headers.get("content-type", mime).split())
+        charset = content_type.get_content_charset() or "utf-8"
+    except Exception:  # noqa: BLE001 -- a malformed header must not drop the whole mailbox
+        charset = "utf-8"
+    try:
+        data = decode_data(payload.get("body", {}).get("data", ""))
+    except ValueError:
+        log.warning("Skipping an undecodable message part")
+        return ""
     try:
         text = data.decode(charset, errors="replace")
     except LookupError:
         text = data.decode("utf-8", errors="replace")
     if mime == "text/html":
         parser = _HTMLText()
-        parser.feed(text)
+        try:
+            parser.feed(text)
+            parser.close()
+        except Exception:  # noqa: BLE001 -- keep whatever text parsed before the error
+            log.warning("Malformed HTML message part")
         return "\n".join(
             line.strip() for line in "".join(parser.parts).splitlines() if line.strip()
         )
-    return text.strip()
+    return unwrap(text.strip())
 
 
 def normalize_message(message):
@@ -229,6 +264,14 @@ class GmailClient:
         return sorted(
             (normalize_message(m) for m in messages), key=lambda m: (m["internal_date"], m["id"])
         )
+
+    def get_threads(self, thread_ids, workers=6):
+        """Fetch threads concurrently; each is one independent read."""
+        thread_ids = list(thread_ids)
+        if len(thread_ids) < 2:
+            return {thread_id: self.get_thread(thread_id) for thread_id in thread_ids}
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return dict(zip(thread_ids, pool.map(self.get_thread, thread_ids)))
 
     def list_drafts(self):
         drafts = []

@@ -60,6 +60,9 @@ def parser():
     result.add_argument("--account", help="Connected Gmail address; optional with one account")
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("desktop-compose", help="Draft a new message locally from JSON on stdin")
+    commands.add_parser(
+        "desktop-compare", help="Draft one request with no adapter and with each persona's adapter"
+    )
     commands.add_parser("desktop-accounts", help="List connected Gmail accounts for the app")
     commands.add_parser("desktop-inbox", help="Fetch current app-owned Gmail drafts")
     commands.add_parser("desktop-send", help="Send one reviewed draft from JSON on stdin")
@@ -186,14 +189,15 @@ def main(argv=None):
     store = None
     client = None
     try:
-        if args.command == "desktop-compose":
-            from gmail_agent.compose import compose
+        if args.command in {"desktop-compose", "desktop-compare"}:
+            from gmail_agent.compose import compare, compose
 
             raw = sys.stdin.read(20001)
             if len(raw) > 20000:
                 raise ValueError("Compose request is too large")
             with redirect_stdout(sys.stderr):
-                result = compose(json.loads(raw))
+                handler = compose if args.command == "desktop-compose" else compare
+                result = handler(json.loads(raw))
             print(json.dumps(result))
             return 0
         if args.command == "info":
@@ -328,7 +332,7 @@ def main(argv=None):
         print(f"Error: {error}", file=sys.stderr)
         return 1
     except Exception as error:  # noqa: BLE001 -- redact provider exceptions at the CLI boundary
-        if args.command == "desktop-compose":
+        if args.command in {"desktop-compose", "desktop-compare"}:
             detail = (
                 f"Missing local model dependency: {error.name}"
                 if isinstance(error, ModuleNotFoundError)

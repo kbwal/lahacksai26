@@ -1008,3 +1008,15 @@ input[type="checkbox"] {
 .connection-options { padding-top: 16px; }
 
 .connection-disclosure[open] .disclosure-caret { transform: rotate(90deg); }
+
+.chat-compose.comparing { width: min(1080px, calc(100vw - 32px)); }
+.compare-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 20px; }
+.compare-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.compare-card.plain { border-style: dashed; }
+.compare-card header { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+.compare-card header small { color: var(--sub); font-size: 11px; }
+.compare-card p { white-space: pre-wrap; line-height: 1.6; margin: 0; }
+.persona-trigger svg:first-child:not(:last-child) { margin-right: 6px; }
+.compare-toggle { display: inline-flex; gap: 6px; align-items: center; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--sub); font-size: 12px; }
+.compare-toggle.active { background: var(--tint); color: inherit; border-color: currentColor; }
+.chat-compose.comparing { width: min(820px, calc(100vw - 32px)); }

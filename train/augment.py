@@ -125,6 +125,57 @@ def persona_for(model, tokenizer, text: str) -> str:
     return PERSONAS[int(mx.argmax(logits[mx.array(firsts)]).item())]
 
 
+# Base models get the same questions as plain-text few-shot completions: they have no
+# assistant turn to answer in, but continue a list of worked examples reliably.
+BASE_PERSONA_HEADER = (
+    "Each conversation below is labeled by who I'm talking to: professional (a coworker, client, "
+    "classmate, teacher, recruiter or company) or social (a friend, family member or partner).\n\n"
+)
+BASE_REQUEST_HEADER = (
+    "Each message I sent is followed by the short, casual request I would type to an AI assistant "
+    "to get it written, naming who it's for and the main point.\n\n"
+)
+# Contextual calibration (Zhao et al., 2021): a base model prefers one label regardless of
+# input, so scores are measured relative to the same prompt with an empty conversation.
+CALIBRATION_TEXT = "Me: ok"
+
+
+def _base_persona_prompt(text: str) -> str:
+    shots = "".join(f"Conversation:\n{t}\nRelationship: {a}\n\n" for t, a in PERSONA_EXAMPLES)
+    return f"{BASE_PERSONA_HEADER}{shots}Conversation:\n{text}\nRelationship:"
+
+
+class BasePersona:
+    """Persona scores from a base model, calibrated against a content-free conversation."""
+
+    def __init__(self, model, tokenizer):
+        self.model, self.tokenizer = model, tokenizer
+        self.firsts = [tokenizer.encode(" " + p, add_special_tokens=False)[0] for p in PERSONAS]
+        assert len(set(self.firsts)) == len(PERSONAS), "persona labels must start with different tokens"
+        self.bias = self.margin(CALIBRATION_TEXT, calibrated=False)
+
+    def margin(self, text: str, calibrated: bool = True) -> float:
+        """log p(professional) - log p(social), minus the content-free margin."""
+        ids = self.tokenizer.encode(_base_persona_prompt(text[:1500]), add_special_tokens=False)
+        logits = self.model(mx.array(ids)[None])[0, -1].astype(mx.float32)
+        scores = logits[mx.array(self.firsts)]
+        value = float((scores[0] - scores[1]).item())
+        return value - self.bias if calibrated else value
+
+    def __call__(self, text: str) -> str:
+        return PERSONAS[0] if self.margin(text) >= 0 else PERSONAS[1]
+
+
+def base_request_for(model, tokenizer, message: str, max_chars: int = 1500) -> str:
+    shots = "".join(f"Message:\n{m}\nRequest: {r}\n\n" for m, r in EXAMPLES)
+    prompt = f"{BASE_REQUEST_HEADER}{shots}Message:\n{message[:max_chars]}\nRequest:"
+    return clean(generate(model, tokenizer, prompt=prompt, max_tokens=40))
+
+
+def is_base_model(path: str) -> bool:
+    return "base" in path.rstrip("/").rsplit("/", 1)[-1].lower()
+
+
 def clean(text: str) -> str:
     line = next((l for l in text.strip().splitlines() if l.strip()), "")
     line = line.strip().strip("\"'`").strip()
@@ -200,6 +251,15 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--name", help="the user's first name, as they sign messages")
     ap.add_argument("--relabel", action="store_true", help="also re-label records that already have an adapter_name")
+    ap.add_argument(
+        "--arm", choices=("base", "instruct"),
+        help="prompt style for --model; defaults to base when the model's folder name says Base",
+    )
+    ap.add_argument(
+        "--max-requests", type=int,
+        help="write at most this many new requests (the newest conversations first); a few hundred teach the format",
+    )
+    ap.add_argument("--concurrency", type=int, default=32, help="parallel requests with --endpoint")
     args = ap.parse_args()
     names_me = re.compile(rf"\b{re.escape(args.name)}\b", re.I) if args.name else None
 
@@ -210,16 +270,53 @@ def main():
         persona, request = llm.persona_for, llm.request_for
     else:
         model, tokenizer = load(args.model)
-        persona = lambda text: persona_for(model, tokenizer, text)
-        request = lambda message: request_for(model, tokenizer, message)
+        if (args.arm or ("base" if is_base_model(args.model) else "instruct")) == "base":
+            persona = BasePersona(model, tokenizer)
+            print(f"base-model persona calibration margin: {persona.bias:+.2f}")
+            request = lambda message: base_request_for(model, tokenizer, message)
+        else:
+            persona = lambda text: persona_for(model, tokenizer, text)
+            request = lambda message: request_for(model, tokenizer, message)
     with open(args.data) as f:
         records = [json.loads(l) for l in f if l.strip()]
+    # Requests go to the newest conversations first when capped.
+    requestable = sorted(
+        (i for i, d in enumerate(records) if opening(d) and not d.get("prompt")),
+        key=lambda i: records[i].get("timestamp_ms", 0), reverse=True,
+    )
+    allowed = set(requestable[: args.max_requests] if args.max_requests is not None else requestable)
+    started = time.monotonic()
+    if args.endpoint:
+        # A remote GPU serves many requests at once; ask everything up front in parallel.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def ask(index):
+            d = records[index]
+            label = persona(text) if (args.relabel or not d.get("adapter_name")) and (text := transcript(d)) else None
+            ask_request = index in allowed and (message := opening(d))
+            if ask_request and args.name:
+                message = unsigned(message, args.name)
+            return label, (request(message) if ask_request and message else None)
+
+        with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            answers = []
+            for n, answer in enumerate(pool.map(ask, range(len(records))), 1):
+                answers.append(answer)
+                if n % 50 == 0:
+                    print(f"[{n}/{len(records)}] answered", flush=True)
+        persona_labels = [a[0] for a in answers]
+        request_answers = [a[1] for a in answers]
+    else:
+        persona_labels = request_answers = None
     added = dropped = 0
     labels = Counter()  # (old adapter_name or None, new one)
     with open(args.out, "w") as f:
-        for d in records:
+        for index, d in enumerate(records):
+            if index and index % 25 == 0:
+                rate = index / (time.monotonic() - started)
+                print(f"[{index}/{len(records)}] {rate:.1f} conversations/s, ~{(len(records) - index) / rate / 60:.0f} min left", flush=True)
             if (args.relabel or not d.get("adapter_name")) and (text := transcript(d)):
-                if name := persona(text):
+                if name := (persona_labels[index] if persona_labels is not None else persona(text)):
                     labels[d.get("adapter_name"), name] += 1
                     d = {"adapter_name": name, **{k: v for k, v in d.items() if k != "adapter_name"}}
                 else:
@@ -227,10 +324,13 @@ def main():
             old = d.get("prompt", "")
             if old and ((names_me and names_me.search(old)) or copies_example(old)):
                 del d["prompt"]
-            if not d.get("prompt") and (message := opening(d)):
+            if not d.get("prompt") and index in allowed and (message := opening(d)):
                 if args.name:
                     message = unsigned(message, args.name)
-                prompt = request(message) if message else ""
+                if request_answers is not None:
+                    prompt = request_answers[index] or ""
+                else:
+                    prompt = request(message) if message else ""
                 if not prompt or (names_me and names_me.search(prompt)) or copies_example(prompt):
                     dropped += 1
                     print(f"dropped {prompt!r}")

@@ -300,8 +300,14 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+
     from gmail_agent.locking import process_lock
     from gmail_agent.runtime import default_paths
 
-    with process_lock(default_paths()["model_lock"]):
+    # Veri trains remotely, so it needn't wait for a local worker to release the GPU.
+    if "veri" in sys.argv[sys.argv.index("--backend") + 1 : sys.argv.index("--backend") + 2] if "--backend" in sys.argv else False:
         main()
+    else:
+        with process_lock(default_paths()["model_lock"]):
+            main()

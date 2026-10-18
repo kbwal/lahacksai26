@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("margin", {
   syncChat: (source, account, workspace) => ipcRenderer.invoke("messages:sync", source, account, workspace),
   copyDraft: (id) => ipcRenderer.invoke("draft:copy", id),
   composeMessage: (request) => ipcRenderer.invoke("compose:generate", request),
+  compareMessage: (request) => ipcRenderer.invoke("compose:compare", request),
   gmailAccounts: () => ipcRenderer.invoke("gmail:accounts"),
   chooseGmailConnection: () => ipcRenderer.invoke("gmail:chooseConnection"),
   gmailInbox: (account) => ipcRenderer.invoke("gmail:inbox", account),
