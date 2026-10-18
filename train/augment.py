@@ -1,6 +1,12 @@
-"""Add a `prompt` to every conversation the user started, so the adapters learn
-to write a new message from a request ("ask sarah to get dinner on tuesday"), not
-only to reply.
+"""Label every conversation with a persona, and add a `prompt` to every
+conversation the user started, so the adapters learn to write a new message from
+a request ("ask sarah to get dinner on tuesday"), not only to reply.
+
+The persona (`adapter_name`) is "professional" or "social". The instruct model
+reads the conversation and we compare the scores of the two words as its answer,
+so the label is always one of them. Records that already have an
+`adapter_name` keep it unless --relabel is given (e.g. to replace the recipient
+rule in pipeline/enron.py).
 
 The request is written by the local instruct model from the opening "me"
 messages. It is a guess at what the user would have typed to get that message
@@ -17,16 +23,39 @@ for messages with little content, like "see attached"), is dropped, since no pro
 is better than a wrong one.
 
     uv run python -m train.augment --model models/Qwen3-1.7B --name Jeff \\
-        --data data/train.jsonl --out data/train.aug.jsonl
+        --data data/train.jsonl --out data/train.aug.jsonl [--relabel]
 """
 
 import argparse
 import json
 import re
+from collections import Counter
 
+import mlx.core as mx
 from mlx_lm import generate, load
 
 from train.format import ME
+
+PERSONAS = ("professional", "social")
+
+# Ask about the relationship, not the tone: asked "is this professional or social?",
+# the 1.7B model called nearly every email professional, love letters included.
+PERSONA_SYSTEM = (
+    "Who am I talking to in this conversation? Answer professional if it's a coworker, client, "
+    "classmate, teacher or company, and social if it's a friend, family member or partner. "
+    "Answer with one word: professional or social."
+)
+
+PERSONA_EXAMPLES = [
+    (
+        "Them: Hi, could you send the Q3 numbers before the board meeting?\n\n"
+        "Me: Sure, attached. Let me know if anything looks off.\n\nThanks,\nJ",
+        "professional",
+    ),
+    ("Me: hey are we still on for basketball saturday? lmk if u need a ride\n\nThem: yes!! pick me up at 9", "social"),
+    ("Me: Dear Professor Lee,\n\nWould you have time to meet next week to discuss my project?", "professional"),
+    ("Me: Mom, my flight lands at 6. Can you pick me up?", "social"),
+]
 
 SYSTEM = (
     "Turn a message I sent into the short request I would type to an AI assistant to get "
@@ -59,6 +88,26 @@ def opening(d: dict) -> str:
             break
         out.append(m["text"].strip())
     return "\n\n".join(out)
+
+
+def transcript(d: dict, max_chars: int = 4000) -> str:
+    """The record as "Me: ..." / "Them: ..." lines, or its request if it has no messages."""
+    lines = [f"{'Me' if m['from'] == ME else 'Them'}: {m['text'].strip()}" for m in d.get("conversation", [])]
+    text = "\n\n".join(lines) or (f"Request: {d['prompt']}" if d.get("prompt") else "")
+    return text[:max_chars]
+
+
+def persona_for(model, tokenizer, text: str) -> str:
+    """Whichever of PERSONAS the model scores higher as the first token of its answer."""
+    messages = [{"role": "system", "content": PERSONA_SYSTEM}]
+    for example, label in PERSONA_EXAMPLES:
+        messages += [{"role": "user", "content": example}, {"role": "assistant", "content": label}]
+    messages.append({"role": "user", "content": text})
+    ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, enable_thinking=False)
+    firsts = [tokenizer.encode(p, add_special_tokens=False)[0] for p in PERSONAS]
+    assert len(set(firsts)) == len(PERSONAS), "persona labels must start with different tokens"
+    logits = model(mx.array(ids)[None])[0, -1]
+    return PERSONAS[int(mx.argmax(logits[mx.array(firsts)]).item())]
 
 
 def clean(text: str) -> str:
@@ -97,6 +146,7 @@ def main():
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--name", help="the user's first name, as they sign messages")
+    ap.add_argument("--relabel", action="store_true", help="also re-label records that already have an adapter_name")
     args = ap.parse_args()
     names_me = re.compile(rf"\b{re.escape(args.name)}\b", re.I) if args.name else None
 
@@ -104,8 +154,13 @@ def main():
     with open(args.data) as f:
         records = [json.loads(l) for l in f if l.strip()]
     added = dropped = 0
+    labels = Counter()  # (old adapter_name or None, new one)
     with open(args.out, "w") as f:
         for d in records:
+            if (args.relabel or not d.get("adapter_name")) and (text := transcript(d)):
+                name = persona_for(model, tokenizer, text)
+                labels[d.get("adapter_name"), name] += 1
+                d = {"adapter_name": name, **{k: v for k, v in d.items() if k != "adapter_name"}}
             old = d.get("prompt", "")
             if old and ((names_me and names_me.search(old)) or copies_example(old)):
                 del d["prompt"]
@@ -121,6 +176,9 @@ def main():
                     added += 1
                     print(f"{prompt!r}  <-  {message[:80]!r}")
             f.write(json.dumps(d) + "\n")
+    print(f"{sum(labels.values())} of {len(records)} conversations labeled with a persona:")
+    for (old, new), n in sorted(labels.items(), key=lambda kv: (str(kv[0][0]), kv[0][1])):
+        print(f"  {old or '(none)':12} -> {new:12} {n}")
     print(f"{added} of {len(records)} conversations got a new prompt, {dropped} dropped (named the user or copied an example) -> {args.out}")
 
 

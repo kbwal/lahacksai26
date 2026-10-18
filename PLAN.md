@@ -60,7 +60,7 @@ Each source has its own ingest/filter/clean. Everything after that is channel-ag
    - Test data until we have a real mailbox: Jeff Dasovich's Enron sent mail ([Kaggle](https://www.kaggle.com/datasets/wcukierski/enron-email-dataset)). 750 of his sent emails are in `train/data/enron/dasovich-j.csv` (gitignored). [pipeline/enron.py](pipeline/enron.py) turns them into conversations: quoted Outlook/Notes history is split into me/them messages, quoted-printable is decoded, Notes line wraps are joined, and the newest 250 are `test`. The persona comes from the recipients: `social` when nobody at Enron is on the email and someone has a personal address.
 2. **Filter:** drop automated messages. For email, that means `List-Unsubscribe`, `Precedence: bulk|list`, `Auto-Submitted`, or a `noreply` sender. For Slack, bot and system messages (`subtype`).
 3. **Clean:** strip anything the model shouldn't learn to copy. For email, `email-reply-parser` strips quoted text, and signatures are found by taking the user's most common trailing block of lines and stripping it. For Slack, resolve `<@U123>` mentions to names and drop file/join stubs.
-4. **Personas:** every conversation gets an `adapter_name` (`professional`, `social`, …). Each persona trains its own LoRA adapter.
+4. **Personas:** every conversation gets an `adapter_name`, `professional` or `social`. Each persona trains its own LoRA adapter. [train/augment.py](train/augment.py) labels any record without one: the instruct model is asked who the user is talking to, and the higher-scoring of the two words wins. `--relabel` replaces existing labels (e.g. the Enron recipient rule).
 5. **Mask ("me" messages only):**
    - regex for `[LINK] [PHONE] [AMOUNT] [TIME] [DATE]`
    - spaCy for `[ADDRESS]` and any dates the regex missed
@@ -105,5 +105,5 @@ hf download Qwen/Qwen3-1.7B --local-dir models/Qwen3-1.7B
 ## 8. Open questions
 
 - Whose data is the demo dataset? It needs ≥500 "me" messages per persona. Until then we test on Enron (Jeff Dasovich: 496 train / 248 test conversations, only 84 of them `social`).
-- How does a conversation get its `adapter_name`? Options: by channel (Slack workspace → professional), by contact, or with a classifier the user corrects.
+- How does a conversation get its `adapter_name`? For training data, the instruct model labels it in augment (step 4). At draft time: probably by channel (Slack workspace → professional), then the contact's last persona, with the model as a fallback the user corrects in the picker.
 - Do we need a `[NAME]` placeholder? It's not in the spec, so it's left out for now.
