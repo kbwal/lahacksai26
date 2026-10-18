@@ -229,3 +229,12 @@ def test_instruct_layout():
         f"{me}dinner tues?<|im_end|>\n<|im_start|>user\nyes<|im_end|>\n{me}great<|im_end|>"
     )
     assert tok.decode([t for t, m in zip(tokens, mask) if m]) == "dinner tues?<|im_end|>great<|im_end|>"
+
+
+def test_trainer_rejects_context_only_exports(tmp_path):
+    from train.trainer import by_adapter
+
+    path = tmp_path / "chat.jsonl"
+    path.write_text('{"adapter_name": "pro", "source": "slack", "usage": "context_only", "conversation": []}\n')
+    with pytest.raises(ValueError, match="context-only"):
+        by_adapter([str(path)], Conversation.from_dict)

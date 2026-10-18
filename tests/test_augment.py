@@ -44,3 +44,32 @@ def test_transcript():
 def test_transcript_of_request_only():
     assert transcript({"conversation": [], "prompt": "ask sarah to get dinner"}) == "Request: ask sarah to get dinner"
     assert transcript({"conversation": []}) == ""
+
+
+def endpoint_answering(top: list[tuple[str, float]], content="email maria the report"):
+    from train.augment import Endpoint
+
+    e = Endpoint("https://example.test/v1/deployments/x", "key")
+    e.chat = lambda messages, **params: {
+        "choices": [
+            {
+                "message": {"content": content},
+                "logprobs": {"content": [{"top_logprobs": [{"token": t, "logprob": lp} for t, lp in top]}]},
+            }
+        ]
+    }
+    return e
+
+
+def test_endpoint_persona_is_the_higher_scoring_label():
+    assert endpoint_answering([("social", -0.1), ("professional", -2.5)]).persona_for("Me: hi") == "social"
+    # Labels can arrive split ("prof" + "essional") or with a leading space.
+    assert endpoint_answering([(" prof", -0.2), ("social", -1.0), ("the", -0.01)]).persona_for("Me: hi") == "professional"
+
+
+def test_endpoint_persona_none_when_no_label_scored():
+    assert endpoint_answering([("I", -0.1), (" ", -0.5)]).persona_for("Me: hi") is None
+
+
+def test_endpoint_request_is_cleaned():
+    assert endpoint_answering([], content='"Request: email maria the report"\nmore').request_for("hi") == "email maria the report"

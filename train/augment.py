@@ -24,11 +24,22 @@ is better than a wrong one.
 
     uv run python -m train.augment --model models/Qwen3-1.7B --name Jeff \\
         --data data/train.jsonl --out data/train.aug.jsonl [--relabel]
+
+With --endpoint, the same questions go to an OpenAI-compatible chat endpoint serving
+an instruct model instead of the local one (e.g. Qwen3-4B on a Veri deployment, see
+train/veri.py), which is much faster than a laptop. The persona is still whichever
+label scores higher, from the first answer token's logprobs.
+
+    uv run python -m train.augment --endpoint https://api.veri.studio/v1/deployments/<id> \\
+        --name Jeff --data data/train.jsonl --out data/train.aug.jsonl --relabel
 """
 
 import argparse
 import json
 import re
+import time
+import urllib.error
+import urllib.request
 from collections import Counter
 
 import mlx.core as mx
@@ -97,12 +108,16 @@ def transcript(d: dict, max_chars: int = 4000) -> str:
     return text[:max_chars]
 
 
+def _few_shot(system: str, examples: list[tuple[str, str]], text: str) -> list[dict]:
+    messages = [{"role": "system", "content": system}]
+    for example, answer in examples:
+        messages += [{"role": "user", "content": example}, {"role": "assistant", "content": answer}]
+    return messages + [{"role": "user", "content": text}]
+
+
 def persona_for(model, tokenizer, text: str) -> str:
     """Whichever of PERSONAS the model scores higher as the first token of its answer."""
-    messages = [{"role": "system", "content": PERSONA_SYSTEM}]
-    for example, label in PERSONA_EXAMPLES:
-        messages += [{"role": "user", "content": example}, {"role": "assistant", "content": label}]
-    messages.append({"role": "user", "content": text})
+    messages = _few_shot(PERSONA_SYSTEM, PERSONA_EXAMPLES, text)
     ids = tokenizer.apply_chat_template(messages, add_generation_prompt=True, enable_thinking=False)
     firsts = [tokenizer.encode(p, add_special_tokens=False)[0] for p in PERSONAS]
     assert len(set(firsts)) == len(PERSONAS), "persona labels must start with different tokens"
@@ -132,17 +147,55 @@ def copies_example(prompt: str) -> bool:
 
 
 def request_for(model, tokenizer, message: str, max_chars: int = 4000) -> str:
-    messages = [{"role": "system", "content": SYSTEM}]
-    for example, request in EXAMPLES:
-        messages += [{"role": "user", "content": example}, {"role": "assistant", "content": request}]
-    messages.append({"role": "user", "content": message[:max_chars]})
+    messages = _few_shot(SYSTEM, EXAMPLES, message[:max_chars])
     prompt = tokenizer.apply_chat_template(messages, add_generation_prompt=True, enable_thinking=False)
     return clean(generate(model, tokenizer, prompt=prompt, max_tokens=60))
 
 
+class Endpoint:
+    """An OpenAI-compatible chat endpoint standing in for the local model: `persona_for` and
+    `request_for` with the same prompts. Waits out rate limits and a waking deployment."""
+
+    def __init__(self, url: str, api_key: str):
+        self.url, self.api_key = url.rstrip("/") + "/chat/completions", api_key
+
+    def chat(self, messages: list[dict], **params) -> dict:
+        # Qwen3 is hybrid-thinking: answer directly, as the local path does.
+        thinking_off = {"chat_template_kwargs": {"enable_thinking": False}}
+        body = json.dumps({"model": "default", "messages": messages, "temperature": 0, **thinking_off, **params}).encode()
+        for attempt in range(8):
+            req = urllib.request.Request(
+                self.url, body, {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                if e.code not in (429, 503) or attempt == 7:
+                    raise RuntimeError(f"{self.url}: HTTP {e.code} {e.read().decode(errors='replace')[:500]}") from None
+                time.sleep(float(e.headers.get("Retry-After") or 5))
+
+    def persona_for(self, text: str) -> str | None:
+        """The label with the higher first-token logprob, or None if neither is in the top 20."""
+        out = self.chat(_few_shot(PERSONA_SYSTEM, PERSONA_EXAMPLES, text), max_tokens=1, logprobs=True, top_logprobs=20)
+        scores = {p: float("-inf") for p in PERSONAS}
+        for t in out["choices"][0]["logprobs"]["content"][0]["top_logprobs"]:
+            for p in PERSONAS:
+                if t["token"].strip() and p.startswith(t["token"].strip()):
+                    scores[p] = max(scores[p], t["logprob"])
+        best = max(PERSONAS, key=scores.get)
+        return best if scores[best] > float("-inf") else None
+
+    def request_for(self, message: str, max_chars: int = 4000) -> str:
+        out = self.chat(_few_shot(SYSTEM, EXAMPLES, message[:max_chars]), max_tokens=60)
+        return clean(out["choices"][0]["message"]["content"] or "")
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True, help="an instruct model, e.g. models/Qwen3-1.7B")
+    src = ap.add_mutually_exclusive_group(required=True)
+    src.add_argument("--model", help="a local instruct model, e.g. models/Qwen3-1.7B")
+    src.add_argument("--endpoint", help="an OpenAI-compatible chat endpoint, e.g. https://api.veri.studio/v1/deployments/<id>")
     ap.add_argument("--data", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--name", help="the user's first name, as they sign messages")
@@ -150,7 +203,15 @@ def main():
     args = ap.parse_args()
     names_me = re.compile(rf"\b{re.escape(args.name)}\b", re.I) if args.name else None
 
-    model, tokenizer = load(args.model)
+    if args.endpoint:
+        from train.veri import api_key
+
+        llm = Endpoint(args.endpoint, api_key())
+        persona, request = llm.persona_for, llm.request_for
+    else:
+        model, tokenizer = load(args.model)
+        persona = lambda text: persona_for(model, tokenizer, text)
+        request = lambda message: request_for(model, tokenizer, message)
     with open(args.data) as f:
         records = [json.loads(l) for l in f if l.strip()]
     added = dropped = 0
@@ -158,16 +219,18 @@ def main():
     with open(args.out, "w") as f:
         for d in records:
             if (args.relabel or not d.get("adapter_name")) and (text := transcript(d)):
-                name = persona_for(model, tokenizer, text)
-                labels[d.get("adapter_name"), name] += 1
-                d = {"adapter_name": name, **{k: v for k, v in d.items() if k != "adapter_name"}}
+                if name := persona(text):
+                    labels[d.get("adapter_name"), name] += 1
+                    d = {"adapter_name": name, **{k: v for k, v in d.items() if k != "adapter_name"}}
+                else:
+                    print(f"no persona label in the endpoint's top tokens, kept {d.get('adapter_name')!r}")
             old = d.get("prompt", "")
             if old and ((names_me and names_me.search(old)) or copies_example(old)):
                 del d["prompt"]
             if not d.get("prompt") and (message := opening(d)):
                 if args.name:
                     message = unsigned(message, args.name)
-                prompt = request_for(model, tokenizer, message) if message else ""
+                prompt = request(message) if message else ""
                 if not prompt or (names_me and names_me.search(prompt)) or copies_example(prompt):
                     dropped += 1
                     print(f"dropped {prompt!r}")

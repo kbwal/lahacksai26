@@ -39,6 +39,13 @@ data, for a fixed number of steps, since an epoch would be a full pass over the 
     uv run python -m train.trainer --model models/Qwen3-1.7B-Base --arm base \\
         --data data/conversations.jsonl --edits data/new_edits.jsonl --replay-frac 0.5 \\
         --adapter-names social --resume-root adapters/base --adapter-root adapters/base --iters 30
+
+On Veri GPUs instead of this machine (uploads the training text, see train/veri.py;
+drop --veri-submit to only write the datasets and configs):
+
+    uv run python -m train.trainer --backend veri --model models/Qwen3-1.7B-Base \\
+        --veri-base-model Qwen/Qwen3-1.7B-Base --arm base \\
+        --data data/conversations.jsonl --edits data/edits.jsonl --adapter-root adapters/veri-base --veri-submit
 """
 
 import argparse
@@ -54,6 +61,7 @@ from mlx_lm.tuner.trainer import TrainingArgs, evaluate, train
 from mlx_lm.tuner.utils import linear_to_lora_layers, load_adapters
 from mlx_lm.utils import save_config
 
+from train import veri
 from train.dpo import MixedDataset, iterate_mixed_batches, mixed_loss, preference_logps, preference_report
 from train.format import (
     ARMS,
@@ -78,6 +86,10 @@ def by_adapter(paths: list[str] | None, parse) -> dict[str, dict[str, list]]:
     groups = defaultdict(lambda: {t: [] for t in TYPES})
     for path in paths or []:
         for d in read_jsonl(path):
+            # Chat exports from the message pipeline are context, not training data
+            # (Discord forbids training on API message content without permission).
+            if d.get("usage") == "context_only":
+                raise ValueError(f"{path}: context-only message exports cannot be used as training data")
             x = parse(d)
             groups[x.adapter_name][x.type].append(x)
     return dict(groups)
@@ -183,7 +195,7 @@ def train_adapter(args, name: str, data: dict, checkpoint: bool) -> bool:
             # mlx-lm calls it "val"; it is the loss on `test_set`.
             steps_per_eval=args.eval_every if test_set else iters + 1,
             val_batches=args.eval_batches,
-            steps_per_save=iters,
+            steps_per_save=args.save_every or iters,
             adapter_file=str(adapter_path / "adapters.safetensors"),
             max_seq_length=args.max_seq_length,
             grad_checkpoint=checkpoint,
@@ -205,6 +217,7 @@ def train_adapter(args, name: str, data: dict, checkpoint: bool) -> bool:
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--backend", choices=("mlx", "veri"), default="mlx", help="train here with mlx-lm, or on Veri GPUs (train/veri.py)")
     ap.add_argument("--model", required=True)
     ap.add_argument("--arm", choices=ARMS, required=True)
     ap.add_argument("--data", nargs="+", help="JSONL of conversations (SFT, the replay pool when resuming, and type 'test' ones for eval)")
@@ -233,6 +246,7 @@ def main():
     )
     ap.add_argument("--eval-every", type=int, default=50, help="steps between test evals (only with type 'test' records)")
     ap.add_argument("--eval-batches", type=int, default=10, help="test batches per periodic eval (the whole test set is evaluated at the end)")
+    ap.add_argument("--save-every", type=int, help="also save the adapter every N steps, so a stopped run keeps its latest checkpoint (default: only at the end)")
     ap.add_argument("--learning-rate", type=float, default=1e-5)
     ap.add_argument("--rank", type=int, default=16)
     ap.add_argument("--num-layers", type=int, default=16)
@@ -244,6 +258,14 @@ def main():
         action="store_false",
         help="train on 'me' messages and edit finals as given, without train/mask.py placeholders",
     )
+    v = ap.add_argument_group("veri (with --backend veri)")
+    v.add_argument("--veri-base-model", help="Hugging Face id of --model (needed when --model is a local directory)")
+    v.add_argument("--veri-stages", nargs="+", choices=("sft", "dpo"), default=["sft"], help="which jobs to prepare/submit (default: SFT only)")
+    v.add_argument("--veri-dpo-base", help="model the DPO job starts from, i.e. the SFT result (default: --veri-base-model)")
+    v.add_argument("--veri-gpu-type", default="A100-80GB")
+    v.add_argument("--veri-gpu-count", type=int, default=1)
+    v.add_argument("--veri-provider", default="vast", help="vast, aws or digitalocean (aws only rents A100/H100 as whole 8-GPU nodes)")
+    v.add_argument("--veri-submit", action="store_true", help="upload the datasets and submit the jobs (bills GPU time)")
     args = ap.parse_args()
     if not (args.data or args.edits):
         ap.error("need --data and/or --edits")
@@ -257,6 +279,12 @@ def main():
             ap.error(f"no training data for adapter(s): {', '.join(sorted(missing))}")
         names = args.adapter_names
     print(f"adapters: {', '.join(names)}")
+
+    if args.backend == "veri":
+        from transformers import AutoTokenizer
+
+        veri.run(args, names, convs, edits, AutoTokenizer.from_pretrained(args.model))
+        return
 
     # mlx-lm turns on gradient checkpointing by patching the layer class, which every
     # reloaded model shares, so it is only asked for once (again would nest it).
