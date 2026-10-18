@@ -7,6 +7,8 @@ inference time (no boundary-merge surprises).
 
 from dataclasses import dataclass
 
+from message_pipeline import SOURCES
+
 ARMS = ("base", "instruct")
 
 SYSTEM_PROMPT = (
@@ -21,6 +23,11 @@ class Pair:
     relationship: str
     thread: str
     reply: str = ""
+    source: str = "gmail"
+
+    def __post_init__(self):
+        if self.source not in SOURCES:
+            raise ValueError("Unknown message source")
 
     @classmethod
     def from_dict(cls, d: dict) -> "Pair":
@@ -29,11 +36,12 @@ class Pair:
             relationship=d.get("relationship") or "unknown",
             thread=d.get("thread") or "(new email)",
             reply=d.get("reply", ""),
+            source=d.get("source", "gmail"),
         )
 
 
 def prompt_text(p: Pair) -> str:
-    return f"To: {p.recipient} ({p.relationship})\nThread: {p.thread}\nReply:"
+    return f"Source: {p.source}\nTo: {p.recipient} ({p.relationship})\nThread: {p.thread}\nReply:"
 
 
 def _encode(tokenizer, text: str) -> list[int]:

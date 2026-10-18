@@ -55,6 +55,7 @@ def context_for(trigger, messages, account_email):
         for m in messages[-3:]
     )
     return {
+        "source": "gmail",
         "recipient": reply_recipient(trigger),
         "relationship": "unknown",
         "thread": text,

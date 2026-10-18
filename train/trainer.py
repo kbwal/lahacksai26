@@ -23,8 +23,16 @@ from train.format import ARMS, Pair, training_example
 
 
 def load_examples(tokenizer, path: str, arm: str) -> list[tuple[list[int], int]]:
+    examples = []
     with open(path) as f:
-        return [training_example(tokenizer, Pair.from_dict(json.loads(l)), arm) for l in f if l.strip()]
+        for line in f:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if item.get("usage") == "context_only":
+                raise ValueError("Context-only message exports cannot be used as training data")
+            examples.append(training_example(tokenizer, Pair.from_dict(item), arm))
+    return examples
 
 
 def main():

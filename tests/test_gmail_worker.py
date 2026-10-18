@@ -806,6 +806,7 @@ def test_feedback_exports_training_edit_with_exact_saved_context(setup):
     assert feedback["draft"] == "[DATE] works for me."
     assert feedback["final"] == "Tomorrow works for me."
     assert feedback["type"] == "train"
+    assert feedback["source"] == feedback["context"]["source"] == "gmail"
     if hasattr(training_format, "Edit"):
         edit = training_format.Edit.from_dict(feedback)
         assert edit.adapter_name == generator.adapter_name
@@ -824,6 +825,7 @@ def test_legacy_feedback_reconstructs_only_saved_message_ids(setup):
     context = json.loads(store.draft(1)["context"])
     del context["conversation"]
     del context["adapter_name"]
+    del context["source"]
     with store.db:
         store.set_state(1, "published", context=json.dumps(context))
     client.send("draft-1")
@@ -831,4 +833,5 @@ def test_legacy_feedback_reconstructs_only_saved_message_ids(setup):
     run_cycle(store, client, account, generator)
     feedback = next(store.feedback(account))
     assert feedback["adapter_name"] == "default"
+    assert feedback["source"] == feedback["context"]["source"] == "gmail"
     assert feedback["conversation"] == [{"from": "them", "text": "Can we meet?"}]

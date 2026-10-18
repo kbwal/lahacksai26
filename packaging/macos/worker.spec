@@ -1,12 +1,12 @@
 """Build on Apple Silicon with the locked packaging environment."""
 
 import os
+from importlib.metadata import distribution
 from pathlib import Path
 
 from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
-    collect_submodules,
     copy_metadata,
 )
 
@@ -26,8 +26,13 @@ hiddenimports = [
 ]
 # Tokenizer configuration selects these by string, including Qwen's tool parser
 # even when this application only generates plain-text replies.
-hiddenimports += collect_submodules("mlx_lm.tool_parsers")
-hiddenimports += collect_submodules("mlx_lm.chat_templates")
+# collect_submodules imports mlx_lm to discover nested packages and can silently
+# return [] when Metal is unavailable in the build sandbox. Read wheel metadata
+# instead; discovering Python sources must not depend on an available GPU.
+for path in distribution("mlx-lm").files or []:
+    name = str(path)
+    if name.startswith(("mlx_lm/tool_parsers/", "mlx_lm/chat_templates/")) and name.endswith(".py"):
+        hiddenimports.append(name[:-3].replace("/", ".").removesuffix(".__init__"))
 
 a = Analysis(
     [str(root / "packaging/macos/entry.py")],

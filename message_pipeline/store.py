@@ -1,0 +1,259 @@
+"""Independent chat checkpoints; Gmail's existing database remains authoritative."""
+
+import json
+import sqlite3
+import time
+from pathlib import Path
+
+from message_pipeline.models import gmail_message
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS connections (
+    source TEXT NOT NULL CHECK(source IN ('slack','discord')),
+    account_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    credential_ref TEXT NOT NULL,
+    activated_at_ms INTEGER NOT NULL,
+    retry_at REAL NOT NULL DEFAULT 0,
+    last_error TEXT,
+    PRIMARY KEY(source,account_id,workspace_id)
+);
+CREATE TABLE IF NOT EXISTS channels (
+    source TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    cursor TEXT,
+    generation INTEGER NOT NULL DEFAULT 0,
+    last_complete_at REAL,
+    PRIMARY KEY(source,account_id,workspace_id,channel_id),
+    FOREIGN KEY(source,account_id,workspace_id)
+        REFERENCES connections(source,account_id,workspace_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS messages (
+    source TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    timestamp_ms INTEGER NOT NULL,
+    generation INTEGER NOT NULL,
+    payload TEXT NOT NULL,
+    PRIMARY KEY(source,account_id,workspace_id,channel_id,message_id),
+    FOREIGN KEY(source,account_id,workspace_id,channel_id)
+        REFERENCES channels(source,account_id,workspace_id,channel_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS message_conversations
+    ON messages(source,account_id,workspace_id,channel_id,thread_id,timestamp_ms,message_id);
+CREATE TABLE IF NOT EXISTS suggestions (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    trigger_message_id TEXT NOT NULL,
+    context TEXT NOT NULL,
+    generated_text TEXT,
+    model_version TEXT,
+    created_at_ms INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('queued','ready','replied','superseded','dismissed','failed')),
+    observed_reply_id TEXT,
+    last_error TEXT,
+    UNIQUE(source,account_id,workspace_id,channel_id,thread_id,trigger_message_id),
+    FOREIGN KEY(source,account_id,workspace_id,channel_id)
+        REFERENCES channels(source,account_id,workspace_id,channel_id) ON DELETE CASCADE
+);
+"""
+
+
+class Store:
+    def __init__(self, path):
+        self.path = Path(path).resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.db = sqlite3.connect(self.path, timeout=30)
+        self.path.chmod(0o600)
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA foreign_keys=ON")
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.executescript(SCHEMA)
+
+    def close(self):
+        self.db.close()
+
+    def connect(self, key, credential_ref, channel_ids):
+        if not channel_ids or any(not channel for channel in channel_ids):
+            raise ValueError("Select at least one channel")
+        with self.db:
+            self.db.execute(
+                """INSERT INTO connections(source,account_id,workspace_id,credential_ref,activated_at_ms)
+                   VALUES (?,?,?,?,?) ON CONFLICT(source,account_id,workspace_id)
+                   DO UPDATE SET credential_ref=excluded.credential_ref,retry_at=0,last_error=NULL""",
+                (*key, credential_ref, time.time_ns() // 1_000_000),
+            )
+            for channel_id in channel_ids:
+                self.db.execute(
+                    """INSERT OR IGNORE INTO channels(source,account_id,workspace_id,channel_id)
+                       VALUES (?,?,?,?)""",
+                    (*key, channel_id),
+                )
+
+    def connection(self, key):
+        row = self.db.execute(
+            "SELECT * FROM connections WHERE source=? AND account_id=? AND workspace_id=?", key
+        ).fetchone()
+        if row is None:
+            raise ValueError("Connection not found; run connect first")
+        return row
+
+    def channels(self, key):
+        return self.db.execute(
+            """SELECT * FROM channels WHERE source=? AND account_id=? AND workspace_id=?
+               ORDER BY channel_id""",
+            key,
+        ).fetchall()
+
+    def begin(self, key, channel_id, initial_state):
+        scope = (*key, channel_id)
+        with self.db:
+            self.db.execute(
+                """UPDATE channels SET cursor=?,generation=generation+1 WHERE
+                   source=? AND account_id=? AND workspace_id=? AND channel_id=? AND cursor IS NULL""",
+                (json.dumps(initial_state), *scope),
+            )
+        return self.db.execute(
+            "SELECT * FROM channels WHERE source=? AND account_id=? AND workspace_id=? AND channel_id=?",
+            scope,
+        ).fetchone()
+
+    def save_page(self, key, channel_id, generation, messages, next_state):
+        scope = (*key, channel_id)
+        with self.db:
+            for message in messages:
+                if (
+                    message.source,
+                    message.account_id,
+                    message.workspace_id,
+                    message.channel_id,
+                ) != scope:
+                    raise ValueError("Message escaped the selected connection/channel")
+                self.db.execute(
+                    """INSERT INTO messages VALUES (?,?,?,?,?,?,?,?,?)
+                       ON CONFLICT(source,account_id,workspace_id,channel_id,message_id)
+                       DO UPDATE SET thread_id=excluded.thread_id,timestamp_ms=excluded.timestamp_ms,
+                       generation=excluded.generation,payload=excluded.payload""",
+                    (
+                        *scope,
+                        message.message_id,
+                        message.thread_id,
+                        message.timestamp_ms,
+                        generation,
+                        json.dumps(message.to_dict(), ensure_ascii=False),
+                    ),
+                )
+            self.db.execute(
+                """UPDATE channels SET cursor=?,last_complete_at=CASE WHEN ? THEN ?
+                   ELSE last_complete_at END WHERE
+                   source=? AND account_id=? AND workspace_id=? AND channel_id=?""",
+                (
+                    json.dumps(next_state) if next_state is not None else None,
+                    next_state is None,
+                    time.time(),
+                    *scope,
+                ),
+            )
+            # Slack's completed history + replies scan reconciles deleted/retention-expired
+            # messages. Discord can silently return [] after READ_MESSAGE_HISTORY is lost,
+            # so absence there is not authoritative evidence of deletion.
+            if next_state is None and key[0] == "slack":
+                self.db.execute(
+                    """DELETE FROM messages WHERE source=? AND account_id=? AND workspace_id=?
+                       AND channel_id=? AND generation!=?""",
+                    (*scope, generation),
+                )
+
+    def export(self, key):
+        self.connection(key)
+        rows = self.db.execute(
+            """SELECT payload FROM messages WHERE source=? AND account_id=? AND workspace_id=?
+               ORDER BY channel_id,thread_id,timestamp_ms,message_id""",
+            key,
+        )
+        for row in rows:
+            yield {**json.loads(row[0]), "usage": "context_only"}
+
+    def conversation(self, key, channel_id, thread_id):
+        rows = self.db.execute(
+            """SELECT payload FROM messages WHERE source=? AND account_id=? AND workspace_id=?
+               AND channel_id=? AND thread_id=? ORDER BY timestamp_ms,message_id""",
+            (*key, channel_id, thread_id),
+        )
+        return [json.loads(row[0]) for row in rows]
+
+    def suggestions(self, key):
+        self.connection(key)
+        for row in self.db.execute(
+            """SELECT * FROM suggestions WHERE source=? AND account_id=? AND workspace_id=?
+               ORDER BY id""",
+            key,
+        ):
+            item = {**dict(row), "context": json.loads(row["context"]), "usage": "context_only"}
+            item["observed_reply"] = None
+            if row["observed_reply_id"]:
+                reply = self.db.execute(
+                    """SELECT payload FROM messages WHERE source=? AND account_id=? AND workspace_id=?
+                       AND channel_id=? AND message_id=?""",
+                    (*key, row["channel_id"], row["observed_reply_id"]),
+                ).fetchone()
+                if reply:
+                    item["observed_reply"] = json.loads(reply[0])
+            # Conversation proximity is not evidence that the suggestion was copied.
+            item["suggestion_use_confirmed"] = False
+            yield item
+
+    def status(self, key):
+        connection = self.connection(key)
+        return {
+            "source": key[0],
+            "account_id": key[1],
+            "workspace_id": key[2],
+            "retry_at": connection["retry_at"],
+            "last_error": connection["last_error"],
+            "channels": [
+                {
+                    "channel_id": row["channel_id"],
+                    "scan_in_progress": row["cursor"] is not None,
+                    "last_complete_at": row["last_complete_at"],
+                }
+                for row in self.channels(key)
+            ],
+            "messages": self.db.execute(
+                "SELECT count(*) FROM messages WHERE source=? AND account_id=? AND workspace_id=?",
+                key,
+            ).fetchone()[0],
+        }
+
+
+def export_gmail(path, account_id):
+    """Read a consistent existing mailbox snapshot without touching Gmail or its schema."""
+    db = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    db.row_factory = sqlite3.Row
+    try:
+        if not db.execute("SELECT 1 FROM accounts WHERE account_id=?", (account_id,)).fetchone():
+            raise ValueError("Gmail account not found")
+        for row in db.execute(
+            """SELECT * FROM messages WHERE account_id=? AND deleted=0
+               ORDER BY thread_id,internal_date,message_id""",
+            (account_id,),
+        ):
+            message = {
+                **dict(row),
+                "id": row["message_id"],
+                "headers": json.loads(row["headers"]),
+                "labels": json.loads(row["labels"]),
+            }
+            if "DRAFT" not in message["labels"]:
+                yield {**gmail_message(message, account_id).to_dict(), "usage": "context_only"}
+    finally:
+        db.close()
