@@ -1,0 +1,48 @@
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { X } from "lucide-react";
+export default function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose(): void;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDialogElement>(null),
+    id = useId();
+  useEffect(() => {
+    const dialog = ref.current!;
+    dialog.showModal();
+    return () => dialog.close();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="modal"
+      aria-labelledby={id}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === ref.current) onClose();
+      }}
+    >
+      <div className="modal-content">
+        <div className="row between">
+          <h2 id={id}>{title}</h2>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Close dialog"
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </dialog>
+  );
+}
