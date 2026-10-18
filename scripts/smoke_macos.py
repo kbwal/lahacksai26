@@ -1,0 +1,79 @@
+"""Verify the shipped archive from an unrelated directory with an isolated data home."""
+
+import argparse
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("archive", type=Path)
+    parser.add_argument("--model", type=Path, help="Also generate a synthetic reply locally")
+    parser.add_argument("--arm", choices=("instruct", "base"), default="instruct")
+    parser.add_argument("--model-lock", type=Path, help="Share the running worker's model lock")
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="lahacks-sidecar-") as temporary:
+        root = Path(temporary).resolve()
+        subprocess.run(
+            ["/usr/bin/ditto", "-x", "-k", str(args.archive.resolve()), str(root)], check=True
+        )
+        bundle = root / "lahacks-mail-worker"
+        executable = bundle / "lahacks-mail-worker"
+        forbidden = [
+            path
+            for path in bundle.rglob("*")
+            if path.suffix in {".db", ".mbox", ".safetensors"}
+            or path.name.startswith("client_secret")
+            or path.name in {"credentials.json", ".git", ".venv"}
+        ]
+        if forbidden:
+            raise RuntimeError(
+                "Archive contains private data, model weights, or source environment"
+            )
+        subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(executable)], check=True)
+        app_home = root / "Application Support" / "test app"
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"}
+        }
+        env.update(LAHACKS_MAIL_HOME=str(app_home), PATH="/usr/bin:/bin")
+
+        def call(*arguments):
+            result = subprocess.run(
+                [str(executable), *arguments],
+                cwd=root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=True,
+            )
+            return json.loads(result.stdout)
+
+        info = call("info")
+        assert info["bundled"] and info["interface_version"] == 1
+        assert info["paths"]["db"] == str(app_home / "data/mail.db")
+        assert not app_home.exists()
+        assert call("status") == []
+        assert (app_home / "data/mail.db").stat().st_mode & 0o777 == 0o600
+        arguments = ["self-check"]
+        if args.model:
+            arguments.extend(["--model", str(args.model.resolve()), "--arm", args.arm])
+        if args.model_lock:
+            arguments.extend(["--model-lock", str(args.model_lock.resolve())])
+        checked = call(*arguments)
+        assert checked["ok"] and checked["metal"]
+        assert checked["inference_checked"] == bool(args.model)
+        print(json.dumps({"relocation": True, "private_data_excluded": True, **checked}, indent=2))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        # These commands use only synthetic input and an empty temporary mailbox.
+        raise SystemExit(f"Bundle check failed: {error.stderr or error}") from error

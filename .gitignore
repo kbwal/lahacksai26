@@ -14,3 +14,9 @@ desktop/release/
 desktop/*.tsbuildinfo
 desktop/test-results/
 desktop/.vite/
+.pytest_cache/
+.ruff_cache/
+client_secret*.json
+credentials.json
+build/
+dist/

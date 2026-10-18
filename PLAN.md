@@ -29,28 +29,29 @@ Companion to [PROJECT.md](PROJECT.md). Target machine: Apple M2, 16 GB unified m
 
 ## 3. Architecture
 
+The automated Gmail reply component is specified in [GMAIL_ARCHITECTURE.md](GMAIL_ARCHITECTURE.md). Gmail is the reading, editing and sending interface. A local worker imports historical mail once, then checks for changes every 30 minutes, generates replies locally, and saves native Gmail drafts.
+
 ```
-Takeout mbox → pipeline/ → data/mail.db (SQLite) → train/ → adapters/
-                                   ↓
-                   server/ (FastAPI on 127.0.0.1, mlx-lm in-process)
-                                   ↑
-                   extension/ (Chrome MV3 side panel + Gmail content script)
+Gmail API ↔ local gmail_agent/ worker ↔ data/mail.db (SQLite)
+                       ↕                        ↓
+             local model + adapter       pipeline/ → train/
+                       ↓
+              native Gmail reply draft
+                       ↓
+              human edits and sends
 ```
 
-- **Side panel:** the main UI. It's bundled with the extension, so it works offline, and the airplane-mode demo runs here. It holds:
-  - the inbox from `mail.db`
-  - the draft editor and placeholder fill
-  - Train now
-  - the A/B page
-- **Gmail content script:** online only. It reads the open thread, inserts drafts and blocks Send while placeholders remain. Note that Gmail autosaves drafts to Google, so our privacy claim is "the model, the data and the adapters never leave the device".
-- **Server:** accepts requests only from our extension's origin, plus a per-install token.
-- **Send guard:** block on `\[[A-Z][A-Z_ ']*\]`, i.e. *any* bracketed uppercase token, in both the UI and the server. The smoke test showed the model inventing new types (`[DINING]`).
-- **Placeholder fill:** `[DATE]` and `[TIME]` suggestions come from a local `.ics` calendar export.
-- **Sending:** goes to a mock outbox. Real sending would need the network.
+- **Data:** OAuth with `gmail.readonly` and `gmail.compose`; credentials in macOS Keychain. Historical import feeds training without automatically drafting replies to old mail.
+- **Schedule:** a per-user macOS LaunchAgent starts the worker at login and restarts it after process exit. Sync every 30 minutes, with catch-up after sleep or restart. Persist the Gmail history cursor and pending reply work together; expose durable cycle health and actual service status separately.
+- **Drafts:** generate one active suggestion per thread and create it through Gmail API. Preserve existing drafts and human edits. The worker never sends mail.
+- **Feedback:** associate the next sent reply with the active generation using account and Gmail thread ID. Capture the original generation and final sent text on the next sync.
+- **Privacy:** processing, training data and adapters stay local; native Gmail drafts are stored by Google.
+- **Application delivery:** macOS first, with a native Apple Silicon sidecar containing Python, the Gmail worker and MLX. The desktop UI controls it through process commands and JSON results. Models, adapters and mail data remain in Application Support, with tokens in Keychain. The build and integration contract are in [DESKTOP_PACKAGING.md](DESKTOP_PACKAGING.md).
+- **UI scope:** this component works through native Gmail drafts. A custom inbox, extension, calendar fill UI and universal placeholder send guard are separate product work. Gmail's native Send action is not controlled by this worker.
 
 ## 4. Data pipeline
 
-1. **Ingest:** `mailbox.mbox` reads the Takeout file. The user's sent mail is identified by `X-Gmail-Labels: Sent`. Threads come from `X-GM-THRID`.
+1. **Ingest:** the Gmail worker imports historical messages and periodic changes into SQLite, preserving Gmail thread IDs and the `SENT` label. Takeout remains an optional import path; its sent labels and thread IDs must be normalized before merging with API data.
 2. **Filter:** drop messages with `List-Unsubscribe`, `Precedence: bulk|list`, `Auto-Submitted`, or a `noreply` sender.
 3. **Clean:** `email-reply-parser` strips quoted text. Signatures are found by taking the user's most common trailing block of lines and stripping it.
 4. **Relationships:** heuristics give a first guess, then the user labels their top ~30 contacts in the UI. Everyone else is `unknown`.
@@ -72,18 +73,20 @@ Takeout mbox → pipeline/ → data/mail.db (SQLite) → train/ → adapters/
 | # | Milestone | Done when |
 |---|---|---|
 | 0 | ✅ Env + trainer smoke test on fake pairs | Both arms train and draft in the fake persona |
-| 1 | Ingest → filter → clean on a real Takeout | 30 spot-checked replies have no quotes or signatures |
+| 1 | Historical Gmail import → filter → clean | 30 spot-checked replies have no quotes or signatures |
 | 2 | Masking, relationships, dataset build | Mask tests pass, and the train/valid JSONL is written |
 | 3 | Train both arms | Two adapters |
 | 4 | Eval + A/B → pick the arm | Decision made |
-| 5 | Server + side panel: inbox, draft, send guard, calendar fill | Masking demo flow works |
-| 6 | Edit logging + Train now (SFT + DPO) | An edit changes the next draft |
-| 7 | Triage classifier | Badges in the inbox |
-| 8 | Airplane-mode rehearsal | Demo runs with Wi-Fi off |
+| 5 | Gmail OAuth, 30-minute sync and native reply drafts | A new eligible email receives a correctly threaded draft in Gmail |
+| 6 | Thread-mapped sent feedback + Train now (SFT + DPO) | A reply edited and sent in Gmail is captured locally and influences a later draft |
+| 7 | Triage classifier | Reply likelihood is available to draft selection |
+| 8 | Offline generation and reconnect rehearsal | Cached-context generation works offline; Gmail sync and draft publication resume after reconnect |
 
-Milestones 1–2 and the UI shell for 5 can run in parallel.
+Historical data preparation and the Gmail worker implementation can proceed in parallel.
 
 ## 7. Setup
+
+The Gmail worker is implemented on the `infra` branch. Follow [GMAIL_SETUP.md](GMAIL_SETUP.md) for Google Cloud setup, OAuth, import, scheduled drafting, and live verification. Cleaning, masking, dataset construction, and feedback-driven training remain separate milestones.
 
 ```bash
 uv sync                          # Python 3.12 (MLX lags behind the system 3.15)
