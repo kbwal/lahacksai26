@@ -49,12 +49,12 @@ import re
 from dataclasses import dataclass, replace
 from typing import NamedTuple
 
+from message_pipeline import SOURCES
 from train.mask import mask_reply
 
 ARMS = ("base", "instruct")
 ME, THEM = "me", "them"
 TYPES = ("train", "test")
-SOURCES = ("gmail", "slack", "discord")
 
 SYSTEM_PROMPT = (
     "Write the user's next message in their own voice. Messages from the other people "
