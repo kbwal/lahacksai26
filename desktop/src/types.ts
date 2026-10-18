@@ -44,12 +44,21 @@ export interface Draft {
   placeholderEdits?: PlaceholderEdits;
   timeEdit?: { template: string; choice: TimeChoice; rendered: string };
 }
+export interface PersonalDetails {
+  autoFill: boolean;
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  website: string;
+}
 export interface Workspace {
   version: 1;
   mode: "demo" | "local";
   connections: AppConnection[];
   roles: Persona[];
   drafts: Draft[];
+  personalDetails?: PersonalDetails;
   preferences: { automaticDrafts: boolean; learnFromEdits: boolean };
 }
 export interface TimeChoice {

@@ -101,3 +101,11 @@ Professional and Social are the default personas. Loading an older workspace rem
 **Draft a message** opens an app selector, allowed-persona selector, optional recipient/subject, and message prompt. The native app asks for a local instruct model folder on first use (choose `models/Qwen3.5-2B`, not `Qwen3.5-2B-Base`). This choice is saved on the device; the composer can choose another model later. Generation runs through the bundled MLX worker using the shared model lock, without accessing Gmail or sending anything. It uses the persona description for style; trained adapters are not yet connected to this composer.
 
 New-message drafts persist in the inbox and survive Gmail refresh. Fill any highlighted details and use **Copy draft** to move the text into the destination app. Sending new messages from Margin is not connected; the existing Send action is for owned Gmail reply drafts only. The browser preview displays the composer but local generation requires the Mac app.
+
+## Saved personal details and prompt composer
+
+Settings → **Your details** stores name, email, phone, address, and website locally, with an explicit **Automatically fill my details** toggle. When enabled, it fills matching unresolved placeholders in existing drafts, loaded snapshots, refreshed Gmail replies, and newly generated messages. Existing inserted values are preserved and remain editable; changing a saved value only affects unresolved fields. Disabling automatic filling does not remove earlier insertions.
+
+Names recognize `[NAME]`, `[YOUR NAME]`, `[FULL_NAME]`, and `[SENDER NAME]`; email/phone/address recognize their corresponding named fields, and websites fill `[WEBSITE]` or `[PERSONAL WEBSITE]`. Generic `[LINK]` fields remain unresolved because they may refer to a meeting instead of a personal website. Dates, times, amounts, and unknown fields stay for review. Autofill never sends a message. Old snapshots without `personalDetails` remain valid.
+
+The new-message composer puts a persona picker above a prompt box, with an app chip and arrow submit action. **Message details** expands optional recipient, subject, and model controls. Cmd/Ctrl+Enter submits. Changing personas preserves the prompt; the picker lists only personas allowed for the selected app. Generation still uses the existing local worker and the selected persona’s description.

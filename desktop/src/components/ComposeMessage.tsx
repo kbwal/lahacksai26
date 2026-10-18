@@ -1,47 +1,85 @@
-import { useState, type FormEvent } from 'react';
-import type { AppId, Draft, Persona } from '../types';
-import { APP_IDS, APP_NAMES, normalizeComposedBody } from '../lib/domain';
-import Modal from './Modal';
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { ArrowUpIcon, CaretDownIcon, CheckIcon, SlidersHorizontalIcon } from "@phosphor-icons/react";
+import type { AppId, Draft, Persona } from "../types";
+import { APP_IDS, APP_NAMES, normalizeComposedBody } from "../lib/domain";
+import AppMark from "./AppMark";
+import Modal from "./Modal";
 export default function ComposeMessage({personas, initialApp, onClose, onSave}: {
   personas: Persona[]; initialApp: AppId; onClose(): void; onSave(draft: Draft): void;
 }) {
   const [appId, setApp] = useState(initialApp);
   const allowed = personas.filter(p => !p.excludedApps.includes(appId));
-  const [selected, setSelected] = useState(allowed[0]?.id || '');
-  const personaId = allowed.some(p => p.id === selected) ? selected : allowed[0]?.id || '';
-  const [recipient, setRecipient] = useState('');
-  const [subject, setSubject] = useState('');
-  const [prompt, setPrompt] = useState('');
+  const [selected, setSelected] = useState(allowed[0]?.id || "");
+  const persona = allowed.find(p => p.id === selected) || allowed[0];
+  const [recipient, setRecipient] = useState("");
+  const [subject, setSubject] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [changeModel, setChangeModel] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerId = useId();
+  const picker = useRef<HTMLDivElement>(null);
+  const pickerButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (pickerOpen) picker.current?.querySelector<HTMLButtonElement>("button[aria-pressed='true'], button")?.focus();
+  }, [pickerOpen]);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!window.margin || busy || !personaId || !prompt.trim()) return;
-    setBusy(true); setError('');
+    if (!window.margin || busy || !persona || !prompt.trim()) return;
+    setBusy(true); setError(""); setPickerOpen(false);
     try {
-      const result = await window.margin.composeMessage({appId, personaId, prompt:prompt.trim(), recipient:recipient.trim(), subject:subject.trim(), changeModel});
-      if (!result) { setBusy(false); return; }
-      onSave({id:crypto.randomUUID(), appId, roleId:personaId, subject:subject.trim() || 'New message', recipient:recipient.trim() || 'Recipient to choose', address:recipient.trim(), context:'', body:normalizeComposedBody(result.body), updatedAt:new Date().toISOString(), localChanges:true, composed:true});
-    } catch (e) { setError(e instanceof Error ? e.message : 'Could not draft this message.'); }
-    finally { setBusy(false); }
+      const result = await window.margin.composeMessage({appId, personaId:persona.id, prompt:prompt.trim(), recipient:recipient.trim(), subject:subject.trim(), changeModel});
+      if (!result) return;
+      onSave({id:crypto.randomUUID(), appId, roleId:persona.id, subject:subject.trim() || "New message", recipient:recipient.trim() || "Recipient to choose", address:recipient.trim(), context:"", body:normalizeComposedBody(result.body), updatedAt:new Date().toISOString(), localChanges:true, composed:true});
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Could not draft this message.";
+      setError(message.replace(/^Error invoking remote method '[^']+': Error: /, ""));
+    } finally {setBusy(false);}
   }
-  return <Modal title="Draft a message" onClose={() => {if (!busy) onClose();}}>
-    <form onSubmit={submit}>
-      <p className="sub spaced">Start a new conversation. Describe what you want to say, then review the draft before sharing it.</p>
-      <fieldset disabled={busy} className="compose-fields">
-        <label className="field">App<select value={appId} onChange={e => setApp(e.target.value as AppId)}>{APP_IDS.map(id => <option key={id} value={id}>{APP_NAMES[id]}</option>)}</select></label>
-        <label className="field">Persona<select data-initial-focus value={personaId} onChange={e => setSelected(e.target.value)}>{!allowed.length && <option value="">No personas allowed for this app</option>}{allowed.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-        <label className="field">To <span className="sub">(optional)</span><input maxLength={320} value={recipient} onChange={e => setRecipient(e.target.value)} placeholder={appId === 'slack' ? 'Person or channel' : 'Name or email address'} /></label>
-        <label className="field">Subject <span className="sub">(optional)</span><input maxLength={300} value={subject} onChange={e => setSubject(e.target.value)} placeholder="What’s this about?" /></label>
-        <label className="field compose-prompt">What would you like to say?<textarea rows={4} maxLength={6000} required value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Ask Alex to join our project demo next week. Keep it brief and include a meeting link placeholder." /></label>
+  return <Modal title="New message" className="chat-compose" onClose={() => {if (!busy) onClose();}}>
+    <form onSubmit={submit} onClick={event => {
+      if (!(event.target as HTMLElement).closest(".persona-picker")) setPickerOpen(false);
+    }}>
+      <div className="compose-topline">
+        <div className="persona-picker" onKeyDown={event => {
+          if (event.key === "Escape" && pickerOpen) {
+            event.preventDefault(); event.stopPropagation(); setPickerOpen(false); pickerButton.current?.focus();
+          }
+        }}>
+          <button ref={pickerButton} type="button" className="persona-trigger" disabled={busy} aria-expanded={pickerOpen} aria-controls={pickerId} aria-label={`Choose persona: ${persona?.name || "None available"}`} onClick={() => setPickerOpen(open => !open)}>
+            {persona?.name || "Choose a persona"}<CaretDownIcon size={16} />
+          </button>
+          {pickerOpen && <div ref={picker} id={pickerId} className="persona-options" role="group" aria-label="Choose persona">
+            <span className="overline">Your personas</span>
+            {!allowed.length && <p className="sub">No personas are allowed for {APP_NAMES[appId]}. Update your persona’s app settings.</p>}
+            {allowed.map(item => <button type="button" key={item.id} aria-pressed={persona?.id === item.id} onClick={() => {setSelected(item.id); setPickerOpen(false); pickerButton.current?.focus();}}>
+              <span><strong>{item.name}</strong><small>{item.description}</small></span>
+              {persona?.id === item.id && <CheckIcon size={17} />}
+            </button>)}
+          </div>}
+        </div>
+        <span className="sub">Drafting on your Mac</span>
+      </div>
+      <div className="compose-intro"><h3>What would you like to say?</h3><p className="sub">A new conversation, in your voice.</p></div>
+      <div className="chat-prompt">
+        <textarea data-initial-focus aria-label="Message prompt" rows={5} maxLength={6000} required disabled={busy} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Invite Alex to our project demo next week. Keep it friendly and brief…" onKeyDown={event => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {event.preventDefault(); event.currentTarget.form?.requestSubmit();}
+        }} />
+        <div className="chat-prompt-toolbar">
+          <label className="compose-app" data-app={appId}><AppMark app={appId} size={16} /><select aria-label="Destination app" value={appId} disabled={busy} onChange={e => setApp(e.target.value as AppId)}>{APP_IDS.map(id => <option key={id} value={id}>{APP_NAMES[id]}</option>)}</select></label>
+          <button className="compose-submit primary" type="submit" aria-label={busy ? "Drafting message" : "Generate draft"} disabled={busy || !persona || !prompt.trim() || !window.margin}><ArrowUpIcon size={21} /></button>
+        </div>
+      </div>
+      <details className="compose-options"><summary><SlidersHorizontalIcon size={15} />Message details <span className="sub">Optional</span></summary><fieldset disabled={busy} className="compose-fields">
+        <label className="field">To<input maxLength={320} value={recipient} onChange={e => setRecipient(e.target.value)} placeholder={appId === "slack" ? "Person or channel" : "Name or email address"} /></label>
+        <label className="field">Subject<input maxLength={300} value={subject} onChange={e => setSubject(e.target.value)} placeholder="What’s this about?" /></label>
         <label className="row spaced"><input type="checkbox" checked={changeModel} onChange={e => setChangeModel(e.target.checked)} />Choose a different local model</label>
-      </fieldset>
-      <p className="sub spaced">Style follows your persona description. Training on your writing history isn’t connected here yet. Drafts stay on your Mac until you copy them into your app.</p>
+      </fieldset></details>
+      <p className="compose-note sub">Style follows your persona description. Training on your writing history isn’t connected here yet. Review the draft, then copy it into your app.</p>
       {!window.margin && <p className="warning spaced">Open Margin on your Mac to generate with a local model.</p>}
       {busy && <p role="status" className="sub spaced">Drafting on your Mac… Loading the model can take a minute.</p>}
       {error && <p role="alert" className="error spaced">{error}</p>}
-      <div className="modal-footer"><button type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="primary" disabled={busy || !personaId || !prompt.trim() || !window.margin}>{busy ? 'Drafting…' : 'Generate draft'}</button></div>
     </form>
   </Modal>;
 }

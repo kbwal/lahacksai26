@@ -18,6 +18,8 @@ import {
 } from "@phosphor-icons/react";
 import type { AppId, Draft, Page, Persona, Workspace } from "./types";
 import {
+  applyPersonalDetails,
+  applyWorkspaceDetails,
   allowedRoles,
   searchDrafts,
   APP_LINKS,
@@ -30,6 +32,7 @@ import {
 } from "./lib/domain";
 import { loadWorkspace, openExternal, saveWorkspace } from "./lib/storage";
 import { sampleWorkspace } from "./lib/sample";
+import PersonalDetailsSettings from "./components/PersonalDetailsSettings";
 import ComposeMessage from "./components/ComposeMessage";
 import RoleEditor from "./components/RoleEditor";
 import AppMark from "./components/AppMark";
@@ -80,7 +83,7 @@ export default function App() {
   );
 }
 function Dashboard({ initial }: { initial: Workspace }) {
-  const [state, setState] = useState(initial),
+  const [state, setState] = useState(() => applyWorkspaceDetails(initial)),
     [page, setPage] = useState<Page>("drafts");
   const [app, setApp] = useState<AppId | "all">("gmail"),
     [draftId, setDraftId] = useState("office");
@@ -159,7 +162,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
           ...incoming,
         ],
       });
-      setState(next);
+      setState(applyWorkspaceDetails(next));
       setGmailAccount(result.accountId);
       selectApp("gmail");
       setQuery("");
@@ -294,7 +297,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
         )
       )
         return;
-      setState({ ...imported, mode: "local" });
+      setState(applyWorkspaceDetails({ ...imported, mode: "local" }));
       setNotice(
         "Local workspace imported. Nothing was sent to an external service.",
       );
@@ -773,6 +776,10 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 </p>
               </section>
               <section className="settings-body">
+                <PersonalDetailsSettings value={state.personalDetails} onSave={personalDetails => {
+                  setState(s => applyWorkspaceDetails({...s, personalDetails}));
+                  setNotice(personalDetails.autoFill ? "Personal details saved. Matching unfilled fields have been updated." : "Personal details saved. Automatic filling is off.");
+                }} />
                 <h2>Connected apps</h2>
                 <p className="sub spaced">
                   Connect once. Every persona is included unless you add an
@@ -929,7 +936,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
         initialApp={app === "all" ? "gmail" : app}
         onClose={() => setComposing(false)}
         onSave={(draft) => {
-          setState(s => parseWorkspace({...s, drafts: [draft, ...s.drafts]}));
+          setState(s => parseWorkspace({...s, drafts: [applyPersonalDetails(draft, s.personalDetails), ...s.drafts]}));
           setApp(draft.appId); setDraftId(draft.id); setQuery(""); setComposing(false);
           setNotice("New message drafted locally. Review its details, then copy it into your app.");
         }}

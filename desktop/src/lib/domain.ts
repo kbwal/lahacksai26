@@ -5,6 +5,7 @@ import type {
   TimeChoice,
   Workspace,
   PlaceholderEdits,
+  PersonalDetails,
 } from "../types";
 export const APP_IDS: AppId[] = ["gmail", "slack", "outlook"];
 export const APP_NAMES = { gmail: "Gmail", slack: "Slack", outlook: "Outlook" };
@@ -232,6 +233,42 @@ export function fillDetail(
   const { timeEdit: _legacy, ...rest } = draft;
   return { ...rest, body, placeholderEdits, localChanges: true };
 }
+export const EMPTY_PERSONAL_DETAILS: PersonalDetails = {
+  autoFill: false, name: "", email: "", phone: "", address: "", website: "",
+};
+export function personalDetailsError(details: PersonalDetails): string {
+  for (const key of ["name", "email", "phone", "address", "website"] as const) {
+    if (details[key].length > 1000 || details[key].includes("\0") || placeholders(normalizeComposedBody(details[key])).length)
+      return "Use actual personal details, under 1,000 characters per field.";
+  }
+  if (details.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(details.email))
+    return "Enter a valid email address.";
+  if (details.website && detailValueError("[LINK]", details.website))
+    return "Enter a valid website address.";
+  return "";
+}
+export function applyPersonalDetails(draft: Draft, profile?: PersonalDetails): Draft {
+  if (!profile?.autoFill) return draft;
+  let result = draft;
+  for (const detail of draftDetails(draft)) {
+    if (detail.value) continue;
+    const label = detail.token.slice(1, -1).replaceAll("_", " ").replace(/^YOUR /, "");
+    const fields: Record<string, keyof Omit<PersonalDetails, "autoFill">> = {
+      NAME: "name", "FULL NAME": "name", "SENDER NAME": "name",
+      EMAIL: "email", "EMAIL ADDRESS": "email", PHONE: "phone", "PHONE NUMBER": "phone",
+      ADDRESS: "address", "POSTAL ADDRESS": "address", WEBSITE: "website", "PERSONAL WEBSITE": "website",
+    };
+    const field = fields[label];
+    if (field && profile[field].trim()) {
+      try { result = fillDetail(result, detail.key, profile[field]); }
+      catch { /* Keep the field unresolved when inserting it would exceed draft limits. */ }
+    }
+  }
+  return result;
+}
+export function applyWorkspaceDetails(workspace: Workspace): Workspace {
+  return {...workspace, drafts: workspace.drafts.map(d => applyPersonalDetails(d, workspace.personalDetails))};
+}
 export function roleFormErrors(
   name: string,
   description: string,
@@ -424,6 +461,20 @@ export function parseWorkspace(input: unknown): Workspace {
     };
   });
   unique(drafts);
+  let personalDetails: PersonalDetails | undefined;
+  if (w.personalDetails !== undefined) {
+    const saved = object(w.personalDetails);
+    personalDetails = {
+      autoFill: bool(saved.autoFill),
+      name: str(saved.name, "name", 1000),
+      email: str(saved.email, "email", 1000),
+      phone: str(saved.phone, "phone", 1000),
+      address: str(saved.address, "address", 1000),
+      website: str(saved.website, "website", 1000),
+    };
+    const issue = personalDetailsError(personalDetails);
+    if (issue) throw new Error(issue);
+  }
   const prefs = object(w.preferences);
   return {
     version: 1,
@@ -431,6 +482,7 @@ export function parseWorkspace(input: unknown): Workspace {
     connections,
     roles,
     drafts,
+    personalDetails,
     preferences: {
       automaticDrafts: bool(prefs.automaticDrafts),
       learnFromEdits: bool(prefs.learnFromEdits),

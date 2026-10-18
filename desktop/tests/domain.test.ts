@@ -305,3 +305,38 @@ it('turns model-generated mixed-case fields into editable placeholders', async (
   w.drafts[0].body = 'Join [Your Link]';
   expect(draftDetails(parseWorkspace(w).drafts[0])[0].token).toBe('[LINK]');
 });
+
+describe('saved personal details', () => {
+  it('fills known personal fields while leaving meeting details and existing edits alone', async () => {
+    const {applyPersonalDetails, draftDetails, fillDetail, EMPTY_PERSONAL_DETAILS} = await import('../src/lib/domain');
+    const profile = {...EMPTY_PERSONAL_DETAILS, autoFill:true, name:'Sam Example', email:'sam@example.com', phone:'+1 310 555 0123', address:'123 Example Street', website:'https://example.com'};
+    const draft = {...sampleWorkspace().drafts[0], body:'[YOUR NAME]\n[EMAIL]\n[PHONE]\n[ADDRESS]\n[WEBSITE]\nMeet [DATE] at [TIME] via [LINK].'};
+    const filled = applyPersonalDetails(draft, profile);
+    expect(filled.body).toBe('Sam Example\nsam@example.com\n+1 310 555 0123\n123 Example Street\nhttps://example.com\nMeet [DATE] at [TIME] via [LINK].');
+    expect(filled.localChanges).toBe(true);
+    expect(draftDetails(filled)[0].value).toBe('Sam Example');
+    const edited = fillDetail(filled, '0', 'My edited name');
+    expect(applyPersonalDetails(edited, {...profile,name:'Another name'}).body).toContain('My edited name');
+    expect(applyPersonalDetails(draft, {...profile,autoFill:false})).toBe(draft);
+    expect(applyPersonalDetails(filled, profile).body).toBe(filled.body);
+    const w = sampleWorkspace(); w.personalDetails = profile; w.drafts[0] = filled;
+    const reopened = parseWorkspace(JSON.parse(JSON.stringify(w)));
+    expect(reopened.personalDetails).toEqual(profile);
+    expect(reopened.drafts[0].body).toBe(filled.body);
+  });
+  it('supports old snapshots and rejects invalid personal values', async () => {
+    const {EMPTY_PERSONAL_DETAILS, personalDetailsError} = await import('../src/lib/domain');
+    expect(parseWorkspace(sampleWorkspace()).personalDetails).toBeUndefined();
+    for (const update of [{email:'not an email'},{website:'javascript:alert(1)'},{name:'[Your Name]'},{phone:'x'.repeat(1001)}]) {
+      expect(personalDetailsError({...EMPTY_PERSONAL_DETAILS,...update})).not.toBe('');
+      const w = sampleWorkspace(); w.personalDetails = {...EMPTY_PERSONAL_DETAILS,...update};
+      expect(() => parseWorkspace(w)).toThrow();
+    }
+  });
+});
+
+it('leaves a personal field unresolved if auto-fill would exceed the draft limit', async () => {
+  const {applyPersonalDetails, EMPTY_PERSONAL_DETAILS} = await import('../src/lib/domain');
+  const draft = {...sampleWorkspace().drafts[0], body:'x'.repeat(59980) + '[NAME]'};
+  expect(applyPersonalDetails(draft, {...EMPTY_PERSONAL_DETAILS,autoFill:true,name:'y'.repeat(1000)}).body).toBe(draft.body);
+});
