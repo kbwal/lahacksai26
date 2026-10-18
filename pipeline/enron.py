@@ -155,7 +155,8 @@ def main():
                 "adapter_name": persona(msg, SOCIAL_DOMAINS),
                 "type": "test" if i >= len(rows) - args.test else "train",
                 "conversation": conversation,
-                "source": path,
+                "source": "gmail",  # the channel the Gmail worker sends at inference
+                "file": path,
                 "date": parsedate_to_datetime(msg["Date"]).isoformat(),
             }
         )

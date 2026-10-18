@@ -6,12 +6,15 @@ Loss goes on the "me" messages only. One JSONL record per conversation:
 
     {"adapter_name": "social",
      "type": "train",
+     "source": "slack",
      "prompt": "ask sarah to get dinner on tuesday",
      "conversation": [{"from": "me", "text": "..."}, {"from": "them", "text": "..."}, ...]}
 
 `adapter_name` picks the LoRA adapter (persona) the record trains. `type` is
 "train" (the default) or "test": test records are held out and only evaluated
-on. `prompt` is
+on. `source` is the channel the conversation happened on (one of SOURCES), and
+is optional; it goes in the header, so the model can learn how the user writes
+differently on each one. `prompt` is
 optional, and only allowed when the conversation starts with "me". It is the
 request the user would type to get that opening message written (see
 train/augment.py), so the same adapter can also write new messages, not just
@@ -19,6 +22,7 @@ replies.
 
 Base arm, plain text. Every "me" message ends with <|endoftext|>:
 
+    Source: slack
     Request: ask sarah to get dinner on tuesday
 
     Me: hey! dinner [DATE]?<|endoftext|>
@@ -28,7 +32,7 @@ Base arm, plain text. Every "me" message ends with <|endoftext|>:
     Me: ...
 
 Instruct arm, ChatML. "them" is the user role, "me" the assistant, and the
-request goes in the system prompt. Every assistant turn carries the empty think
+source and request go in the system prompt. Every assistant turn carries the empty think
 block that `enable_thinking=False` adds to the generation prompt. The stock
 template drops it from earlier turns, which would make a message trained as
 history look different from one being generated.
@@ -50,6 +54,7 @@ from train.mask import mask_reply
 ARMS = ("base", "instruct")
 ME, THEM = "me", "them"
 TYPES = ("train", "test")
+SOURCES = ("gmail", "slack", "discord")
 
 SYSTEM_PROMPT = (
     "Write the user's next message in their own voice. Messages from the other people "
@@ -78,6 +83,7 @@ class Conversation:
     messages: list[Message]
     prompt: str = ""
     type: str = "train"
+    source: str = ""  # one of SOURCES, or "" when unknown
 
     @classmethod
     def from_dict(cls, d: dict) -> "Conversation":
@@ -94,7 +100,10 @@ class Conversation:
         kind = d.get("type") or "train"
         if kind not in TYPES:
             raise ValueError(f"type must be one of {TYPES}, got {kind!r}")
-        return cls(adapter_name=name, messages=messages, prompt=prompt, type=kind)
+        source = d.get("source") or ""
+        if source and source not in SOURCES:
+            raise ValueError(f"source must be one of {SOURCES}, got {source!r}")
+        return cls(adapter_name=name, messages=messages, prompt=prompt, type=kind, source=source)
 
 
 def masked(c: Conversation) -> Conversation:
@@ -122,9 +131,11 @@ def _ids(tokenizer, text: str) -> list[int]:
 
 
 def _header(tokenizer, c: Conversation, arm: str) -> list[int]:
+    lines = [f"Source: {c.source}"] if c.source else []
+    lines += [f"Request: {c.prompt}"] if c.prompt else []
     if arm == "base":
-        return _ids(tokenizer, f"Request: {c.prompt}") if c.prompt else []
-    system = SYSTEM_PROMPT + (f"\n\nRequest: {c.prompt}" if c.prompt else "")
+        return _ids(tokenizer, "\n".join(lines))
+    system = SYSTEM_PROMPT + ("\n\n" + "\n".join(lines) if lines else "")
     return _ids(tokenizer, f"<|im_start|>system\n{system}<|im_end|>")
 
 

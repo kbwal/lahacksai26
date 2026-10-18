@@ -57,6 +57,7 @@ def test_from_dict():
         {"adapter_name": "pro", "conversation": [{"from": "you", "text": "hi"}]},
         {"adapter_name": "../pro", "conversation": []},
         {"adapter_name": "pro", "prompt": "say hi", "conversation": [{"from": "them", "text": "hi"}]},
+        {"adapter_name": "pro", "source": "dasovich-j/sent/17."},
     ],
 )
 def test_from_dict_rejects(d):
@@ -70,6 +71,12 @@ def test_type_defaults_to_train():
     assert Edit.from_dict({"adapter_name": "pro", "type": "test", "draft": "a", "final": "b"}).type == "test"
     with pytest.raises(ValueError):
         Conversation.from_dict({"adapter_name": "pro", "type": "valid"})
+
+
+def test_source_is_optional():
+    assert Conversation.from_dict({"adapter_name": "pro"}).source == ""
+    assert Conversation.from_dict({"adapter_name": "pro", "source": "slack"}).source == "slack"
+    assert Edit.from_dict({"adapter_name": "pro", "source": "discord", "draft": "a", "final": "b"}).context.source == "discord"
 
 
 def test_prompt_allowed_without_conversation():
@@ -109,6 +116,19 @@ def test_base_request_header():
     [example], _ = training_examples(tok, c, "base")
     assert tok.decode(example[0]) == f"Request: say hi to sarah\n\nMe: hey!{EOS}"
     assert tok.decode(prompt_ids(tok, replace(c, messages=[]), "base")) == "Request: say hi to sarah\n\nMe:"
+
+
+def test_source_header():
+    tok = CharTokenizer()
+    c = replace(conv((THEM, "lunch?"), (ME, "sure")), source="slack")
+    [example], _ = training_examples(tok, c, "base")
+    assert tok.decode(example[0]) == f"Source: slack\n\nThem: lunch?\n\nMe: sure{EOS}"
+    assert trained_text(tok, example) == f" sure{EOS}"
+    c = replace(conv(prompt="say hi to sarah"), source="gmail")
+    assert tok.decode(prompt_ids(tok, c, "base")) == "Source: gmail\nRequest: say hi to sarah\n\nMe:"
+    assert tok.decode(prompt_ids(tok, c, "instruct")).startswith(
+        f"<|im_start|>system\n{SYSTEM_PROMPT}\n\nSource: gmail\nRequest: say hi to sarah<|im_end|>\n"
+    )
 
 
 def test_long_conversation_windows_train_each_me_message_once():

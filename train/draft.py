@@ -18,7 +18,7 @@ from pathlib import Path
 
 from mlx_lm import generate, load
 
-from train.format import ARMS, ME, Conversation, cut_turn, prompt_ids
+from train.format import ARMS, ME, SOURCES, Conversation, cut_turn, prompt_ids
 
 
 def draft(model, tokenizer, c: Conversation, arm: str, max_tokens: int = 300) -> str:
@@ -35,6 +35,7 @@ def main():
     ap.add_argument("--data", help="JSONL of conversations")
     ap.add_argument("--type", choices=("train", "test"), help="only records of this type (default: test ones if there are any, else all)")
     ap.add_argument("--prompt", help="write a new message from this request instead")
+    ap.add_argument("--source", choices=SOURCES, help="channel the --prompt message is for (default: none)")
     ap.add_argument("--limit", type=int, default=3)
     ap.add_argument("--max-tokens", type=int, default=300)
     args = ap.parse_args()
@@ -43,7 +44,7 @@ def main():
 
     model, tokenizer = load(args.model, adapter_path=args.adapter_path)
     if args.prompt:
-        c = Conversation(adapter_name=args.adapter_name or "-", messages=[], prompt=args.prompt)
+        c = Conversation(adapter_name=args.adapter_name or "-", messages=[], prompt=args.prompt, source=args.source or "")
         print(draft(model, tokenizer, c, args.arm, args.max_tokens))
         return
 
@@ -59,7 +60,7 @@ def main():
         if last is None:
             continue
         context = replace(c, messages=c.messages[:last])
-        print(f"=== [{c.adapter_name}] {len(context.messages)} earlier messages" + (f", request: {c.prompt}" if c.prompt else ""))
+        print(f"=== [{c.adapter_name}] {len(context.messages)} earlier messages" + (f", request: {c.prompt}" if c.prompt else "") + (f", on {c.source}" if c.source else ""))
         if context.messages:
             print(f"--- last from {context.messages[-1].sender}:\n{context.messages[-1].text}")
         print(f"--- actual:\n{c.messages[last].text}")
