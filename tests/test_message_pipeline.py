@@ -1,5 +1,6 @@
 import json
 import runpy
+import sqlite3
 import sys
 import time
 from dataclasses import replace
@@ -64,6 +65,8 @@ class Session:
 
 
 class Client:
+    prunes_missing = True
+
     def __init__(self, pages):
         self.pages = iter(pages)
         self.states = []
@@ -71,10 +74,12 @@ class Client:
     def identity(self):
         return "U1", "T1"
 
+    verify_identity = SlackClient.verify_identity
+
     def validate_channel(self, *_):
         pass
 
-    def initial_state(self):
+    def initial_state(self, since_ms=None):
         return {"page": 1}
 
     def page(self, account, workspace, channel, state):
@@ -145,8 +150,8 @@ def test_backoff_is_durable_and_does_not_consume_another_page(store):
 
 def test_invalid_cursor_restarts_without_discarding_cache(store):
     store.save_page(KEY, "C1", 0, [message()], {"page": 9})
-    with pytest.raises(ProviderError):
-        sync_once(store, Client([ProviderError("invalid_cursor")]), KEY)
+    status = sync_once(store, Client([ProviderError("invalid_cursor")]), KEY)
+    assert status["channels"][0]["last_error"] == "ProviderError"
     assert store.channels(KEY)[0]["cursor"] is None
     assert store.status(KEY)["messages"] == 1
 
@@ -522,3 +527,205 @@ def test_busy_model_leaves_suggestion_queued(store):
     assert generate_suggestions(store, KEY, Busy(), include_history=True)["generated"] == 0
     assert next(store.suggestions(KEY))["state"] == "queued"
     assert generate_suggestions(store, KEY, Generator(), include_history=True)["generated"] == 1
+
+
+@pytest.mark.parametrize("stage", ["validate", "page"])
+def test_failing_channel_does_not_block_others_or_reconciliation(store, stage):
+    store.connect(KEY, "test-key", ["C1", "C2"])
+    incoming = message(channel_id="C2", is_self=False)
+    store.save_page(KEY, "C2", 0, [incoming], None)
+    generate_suggestions(store, KEY, Generator(), include_history=True)
+    suggestion = next(store.suggestions(KEY))
+    reply = replace(incoming, message_id="sent", is_self=True,
+                    timestamp_ms=suggestion["created_at_ms"] + 1)
+
+    class PartialClient(Client):
+        def validate_channel(self, channel, workspace):
+            if stage == "validate" and channel == "C1":
+                raise ProviderError("http_403")
+
+        def page(self, account, workspace, channel, state):
+            if channel == "C1":
+                raise ProviderError("http_403")
+            return [incoming, reply], None
+
+    status = sync_once(store, PartialClient([]), KEY)
+    assert status["last_error"] is None
+    assert [row["last_error"] for row in status["channels"]] == ["ProviderError", None]
+    assert next(store.suggestions(KEY))["state"] == "replied"
+    sync_once(store, Client([([], None), ([incoming, reply], None)]), KEY)
+    assert all(row["last_error"] is None for row in store.status(KEY)["channels"])
+
+
+def test_reconnect_replaces_selected_channels_without_discarding_history(store):
+    store.save_page(KEY, "C1", 1, [message(is_self=False)], None)
+    generate_suggestions(store, KEY, Generator(), include_history=True)
+    activated = store.connection(KEY)["activated_at_ms"]
+    store.connect(KEY, "rotated-key", ["C2"])
+    assert [row["channel_id"] for row in store.channels(KEY)] == ["C2"]
+    assert store.connection(KEY)["activated_at_ms"] == activated
+    assert len(list(store.export(KEY))) == 1
+    assert list(store.suggestions(KEY)) == []
+    assert generate_suggestions(store, KEY, Generator(), include_history=True)["generated"] == 0
+    with pytest.raises(ValueError, match="not selected"):
+        generate_suggestions(store, KEY, Generator(), channel_id="C1",
+                             thread_id=message().thread_id, include_history=True)
+    client = Client([([], None)])
+    sync_once(store, client, KEY)
+    assert len(client.states) == 1
+    store.connect(KEY, "rotated-key", ["C1"])
+    assert len(list(store.suggestions(KEY))) == 1
+
+
+def test_older_database_migrates_channel_state_without_losing_cursors(tmp_path):
+    from message_pipeline.store import SCHEMA
+
+    path = tmp_path / "old.db"
+    legacy = SCHEMA.replace("    selected INTEGER NOT NULL DEFAULT 1,\n", "").replace(
+        "    last_complete_at REAL,\n    last_error TEXT,", "    last_complete_at REAL,"
+    )
+    with sqlite3.connect(path) as db:
+        db.executescript(legacy)
+        db.execute("INSERT INTO connections VALUES (?,?,?,?,?,0,NULL)", (*KEY, "test", 1))
+        db.execute("INSERT INTO channels VALUES (?,?,?,?,?,2,NULL)", (*KEY, "C1", '{"page":2}'))
+    for _ in range(2):
+        migrated = Store(path)
+        try:
+            row = migrated.channels(KEY)[0]
+            assert row["selected"] == 1 and row["last_error"] is None
+            assert row["generation"] == 2 and json.loads(row["cursor"]) == {"page": 2}
+        finally:
+            migrated.close()
+
+
+def test_failing_conversation_does_not_block_later_suggestions(store):
+    store.save_page(KEY, "C1", 1, [
+        message(is_self=False, thread_id="bad", message_id="bad", timestamp_ms=20),
+        message(is_self=False, thread_id="good", message_id="good", timestamp_ms=10),
+    ], None)
+
+    class PartialGenerator(Generator):
+        def generate(self, context):
+            if context["thread_id"] == "bad":
+                raise ValueError("synthetic generation failure")
+            return super().generate(context)
+
+    result = generate_suggestions(store, KEY, PartialGenerator(), include_history=True)
+    assert result["generated"] == 1 and result["failed"] == 1
+    assert [row["state"] for row in store.suggestions(KEY)] == ["failed", "ready"]
+    assert generate_suggestions(store, KEY, Generator(), include_history=True)["generated"] == 1
+
+
+def test_total_generation_failure_still_surfaces_after_trying_all_threads(store):
+    store.save_page(KEY, "C1", 1, [
+        message(is_self=False, thread_id=str(i), message_id=str(i)) for i in range(2)
+    ], None)
+
+    class BrokenGenerator:
+        def generate(self, context):
+            raise FileNotFoundError("missing model")
+
+    with pytest.raises(FileNotFoundError):
+        generate_suggestions(store, KEY, BrokenGenerator(), include_history=True)
+    assert [row["state"] for row in store.suggestions(KEY)] == ["failed", "failed"]
+
+
+@pytest.mark.parametrize("purge", [False, True])
+def test_run_stops_after_disconnect(store, monkeypatch, capsys, purge):
+    from message_pipeline import __main__ as cli
+
+    credentials = {"test-key": "synthetic"}
+    vault = SimpleNamespace(
+        get_password=lambda service, ref: credentials.get(ref),
+        delete_password=lambda service, ref: credentials.pop(ref),
+    )
+    monkeypatch.setattr(cli, "keychain", lambda: vault)
+    client = Client([([], None)])
+    client.session = Session([])
+    client.auth_scheme = "Bearer"
+    closed = []
+    client.close = lambda: closed.append(True)
+    monkeypatch.setattr(cli, "client_for", lambda *_: client)
+    args = ["--db", str(store.path), "--source", "slack", "--account", "U1", "--workspace", "T1"]
+    sleeps = []
+
+    def disconnect_during_sleep(interval):
+        sleeps.append(interval)
+        assert len(sleeps) == 1, "Disconnected run loop slept again"
+        assert main([*args, "disconnect", *(["--purge"] if purge else [])]) == 0
+
+    monkeypatch.setattr(cli.time, "sleep", disconnect_during_sleep)
+    assert main([*args, "run"]) == 1
+    assert len(sleeps) == 1 and len(client.states) == 1 and closed == [True]
+    output = capsys.readouterr()
+    assert "synthetic" not in output.out + output.err
+
+
+def test_discord_incremental_pages_resume_and_preserve_same_millisecond_messages(store):
+    key = ("discord", "7", "99")
+    store.connect(key, "test", ["88"])
+    timestamp = 1700000000000
+    base = (timestamp - 1420070400000) << 22
+
+    def item(number, kind=0):
+        return {"id": str(base + number), "channel_id": "88", "type": kind,
+                "author": {"id": "8"}, "content": str(number)}
+
+    session = Session([[item(1)], []])
+    client = DiscordClient("test", session=session)
+    client.verify_identity = lambda *_: None
+    client.validate_channel = lambda *_: None
+    sync_once(store, client, key)
+    assert "before" in session.calls[0][1]["params"]
+    assert len(list(store.export(key))) == 1
+    # A short page continues, a system notice advances the cursor, and a restart
+    # resumes the exact snowflake rather than a rounded timestamp.
+    client.session = Session([[item(2), item(1)], [item(4, kind=6), item(3)], []])
+    sync_once(store, client, key, max_pages=1)
+    assert client.session.calls[0][1]["params"]["after"] == str(base - 1)
+    reopened = Store(store.path)
+    try:
+        sync_once(reopened, client, key)
+    finally:
+        reopened.close()
+    assert client.session.calls[1][1]["params"]["after"] == str(base + 2)
+    assert client.session.calls[2][1]["params"]["after"] == str(base + 4)
+    assert [row["message_id"] for row in store.export(key)] == [str(base + i) for i in (1, 2, 3)]
+
+
+def test_suggestions_decode_only_recent_human_context(store, monkeypatch):
+    now = time.time_ns() // 1_000_000
+    incoming = [message(is_self=False, message_id=f"{i:04}", timestamp_ms=now + i)
+                for i in range(1000)]
+    incoming += [
+        message(is_self=False, message_id="bot", is_bot=True, timestamp_ms=now + 1001),
+        message(is_self=False, message_id="empty", text=" \t\n", timestamp_ms=now + 1002),
+        message(is_self=False, message_id="historical", thread_id="old", timestamp_ms=1),
+    ]
+    store.save_page(KEY, "C1", 1, incoming, None)
+    original = store.conversation
+    reads = []
+
+    def bounded_read(*args, **kwargs):
+        assert args[-1] != "old"
+        assert kwargs["last"] in (1, 3)
+        rows = original(*args, **kwargs)
+        reads.append(len(rows))
+        return rows
+
+    monkeypatch.setattr(store, "conversation", bounded_read)
+    generator = Generator()
+    assert generate_suggestions(store, KEY, generator)["generated"] == 1
+    assert generator.contexts[0]["message_ids"] == ["0997", "0998", "0999"]
+    assert generate_suggestions(store, KEY, generator)["generated"] == 0
+    assert max(reads) == 3
+
+
+def test_worker_explains_messages_option_order_and_still_rejects_unknown_flags(capsys):
+    with pytest.raises(SystemExit) as error:
+        worker_main(["--db", "unused.db", "messages", "--source", "slack", "status"])
+    assert error.value.code == 2
+    assert "Place messages first" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        worker_main(["info", "--unknown"])
+    assert "unrecognized arguments" in capsys.readouterr().err

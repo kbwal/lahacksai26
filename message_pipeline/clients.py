@@ -61,6 +61,7 @@ class SlackClient(ReadClient):
     source = "slack"
     base_url = "https://slack.com/api/"
     auth_scheme = "Bearer"
+    prunes_missing = True
 
     def identity(self):
         result = self.get("auth.test")
@@ -71,7 +72,11 @@ class SlackClient(ReadClient):
     def validate_channel(self, channel_id, workspace_id):
         self.get("conversations.info", channel=channel_id)
 
-    def initial_state(self):
+    def verify_identity(self, account_id, workspace_id):
+        if self.identity() != (account_id, workspace_id):
+            raise ValueError("Slack token no longer matches the connected account/workspace")
+
+    def initial_state(self, since_ms=None):
         seconds, micros = divmod(time.time_ns() // 1000, 1_000_000)
         return {"latest": f"{seconds}.{micros:06d}", "threads": []}
 
@@ -153,6 +158,7 @@ class DiscordClient(ReadClient):
     source = "discord"
     base_url = "https://discord.com/api/v10/"
     auth_scheme = "Bot"
+    prunes_missing = False
 
     def identity(self):
         result = self.get("users/@me")
@@ -163,6 +169,10 @@ class DiscordClient(ReadClient):
             raise ValueError("Enable the Discord bot's Message Content intent before importing")
         return result["id"]
 
+    def verify_identity(self, account_id, workspace_id):
+        # The selected human is not the bot; guild scope is checked per channel.
+        self.identity()
+
     def validate_channel(self, channel_id, workspace_id):
         channel = self.get(f"channels/{quote(channel_id, safe='')}")
         if channel.get("guild_id") != workspace_id:
@@ -170,14 +180,18 @@ class DiscordClient(ReadClient):
         if channel.get("type") not in {0, 5, 10, 11, 12}:
             raise ValueError("Select a text channel or a specific thread, not a forum container")
 
-    def initial_state(self):
+    def initial_state(self, since_ms=None):
+        if since_ms is not None:
+            # Replay the last millisecond so snowflakes sharing that timestamp are retained.
+            return {"after": str(max(0, ((since_ms - 1420070400000) << 22) - 1))}
         # Exclusive upper bound freezes this scan; newer arrivals enter the next scan.
         milliseconds = time.time_ns() // 1_000_000
         return {"before": str((milliseconds - 1420070400000) << 22)}
 
     def page(self, account_id, workspace_id, channel_id, state):
+        direction = "after" if "after" in state else "before"
         items = self.get(
-            f"channels/{quote(channel_id, safe='')}/messages", before=state["before"], limit=100
+            f"channels/{quote(channel_id, safe='')}/messages", **{direction: state[direction]}, limit=100
         )
         messages = []
         for item in items:
@@ -206,10 +220,14 @@ class DiscordClient(ReadClient):
         # An empty page proves completion; a short page alone need not.
         if not items:
             return messages, None
-        before = str(min(int(item["id"]) for item in items))
-        if int(before) >= int(state["before"]):
+        ids = [int(item["id"]) for item in items]
+        cursor = max(ids) if direction == "after" else min(ids)
+        if (
+            direction == "after" and min(ids) <= int(state[direction])
+            or direction == "before" and max(ids) >= int(state[direction])
+        ):
             raise ProviderError("pagination_stalled")
-        return messages, {"before": before}
+        return messages, {direction: str(cursor)}
 
 
 def client_for(source, token):

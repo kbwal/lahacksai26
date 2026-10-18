@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS channels (
     cursor TEXT,
     generation INTEGER NOT NULL DEFAULT 0,
     last_complete_at REAL,
+    selected INTEGER NOT NULL DEFAULT 1,
+    last_error TEXT,
     PRIMARY KEY(source,account_id,workspace_id,channel_id),
     FOREIGN KEY(source,account_id,workspace_id)
         REFERENCES connections(source,account_id,workspace_id) ON DELETE CASCADE
@@ -68,6 +70,10 @@ CREATE TABLE IF NOT EXISTS suggestions (
 """
 
 
+class Disconnected(ValueError):
+    """The connection or its credential was removed; a polling worker must exit."""
+
+
 class Store:
     def __init__(self, path):
         self.path = Path(path).resolve()
@@ -78,6 +84,14 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            columns = {row["name"] for row in self.db.execute("PRAGMA table_info(channels)")}
+            for name, definition in (
+                ("selected", "INTEGER NOT NULL DEFAULT 1"), ("last_error", "TEXT")
+            ):
+                if name not in columns:
+                    self.db.execute(f"ALTER TABLE channels ADD COLUMN {name} {definition}")
 
     def close(self):
         self.db.close()
@@ -92,10 +106,15 @@ class Store:
                    DO UPDATE SET credential_ref=excluded.credential_ref,retry_at=0,last_error=NULL""",
                 (*key, credential_ref, time.time_ns() // 1_000_000),
             )
+            self.db.execute(
+                "UPDATE channels SET selected=0 WHERE source=? AND account_id=? AND workspace_id=?",
+                key,
+            )
             for channel_id in channel_ids:
                 self.db.execute(
-                    """INSERT OR IGNORE INTO channels(source,account_id,workspace_id,channel_id)
-                       VALUES (?,?,?,?)""",
+                    """INSERT INTO channels(source,account_id,workspace_id,channel_id)
+                       VALUES (?,?,?,?) ON CONFLICT(source,account_id,workspace_id,channel_id)
+                       DO UPDATE SET selected=1,last_error=NULL""",
                     (*key, channel_id),
                 )
 
@@ -104,15 +123,30 @@ class Store:
             "SELECT * FROM connections WHERE source=? AND account_id=? AND workspace_id=?", key
         ).fetchone()
         if row is None:
-            raise ValueError("Connection not found; run connect first")
+            raise Disconnected("Connection not found; run connect first")
         return row
 
-    def channels(self, key):
+    def channels(self, key, *, selected_only=True):
         return self.db.execute(
             """SELECT * FROM channels WHERE source=? AND account_id=? AND workspace_id=?
-               ORDER BY channel_id""",
-            key,
+               AND (?=0 OR selected=1) ORDER BY channel_id""",
+            (*key, selected_only),
         ).fetchall()
+
+    def fail_channel(self, key, channel_id, error, *, restart=False):
+        with self.db:
+            self.db.execute(
+                """UPDATE channels SET last_error=?,cursor=CASE WHEN ? THEN NULL ELSE cursor END
+                   WHERE source=? AND account_id=? AND workspace_id=? AND channel_id=?""",
+                (error, restart, *key, channel_id),
+            )
+
+    def newest_timestamp(self, key, channel_id):
+        return self.db.execute(
+            """SELECT max(timestamp_ms) FROM messages WHERE source=? AND account_id=?
+               AND workspace_id=? AND channel_id=?""",
+            (*key, channel_id),
+        ).fetchone()[0]
 
     def begin(self, key, channel_id, initial_state):
         scope = (*key, channel_id)
@@ -127,7 +161,7 @@ class Store:
             scope,
         ).fetchone()
 
-    def save_page(self, key, channel_id, generation, messages, next_state):
+    def save_page(self, key, channel_id, generation, messages, next_state, *, prune=False):
         scope = (*key, channel_id)
         with self.db:
             for message in messages:
@@ -153,7 +187,7 @@ class Store:
                     ),
                 )
             self.db.execute(
-                """UPDATE channels SET cursor=?,last_complete_at=CASE WHEN ? THEN ?
+                """UPDATE channels SET cursor=?,last_error=NULL,last_complete_at=CASE WHEN ? THEN ?
                    ELSE last_complete_at END WHERE
                    source=? AND account_id=? AND workspace_id=? AND channel_id=?""",
                 (
@@ -163,10 +197,8 @@ class Store:
                     *scope,
                 ),
             )
-            # Slack's completed history + replies scan reconciles deleted/retention-expired
-            # messages. Discord can silently return [] after READ_MESSAGE_HISTORY is lost,
-            # so absence there is not authoritative evidence of deletion.
-            if next_state is None and key[0] == "slack":
+            # Only providers whose completed scan authoritatively reflects absence prune.
+            if next_state is None and prune:
                 self.db.execute(
                     """DELETE FROM messages WHERE source=? AND account_id=? AND workspace_id=?
                        AND channel_id=? AND generation!=?""",
@@ -183,19 +215,46 @@ class Store:
         for row in rows:
             yield {**json.loads(row[0]), "usage": "context_only"}
 
-    def conversation(self, key, channel_id, thread_id):
+    def conversation(self, key, channel_id, thread_id, *, humans_only=False, last=None):
+        filters = ""
+        if humans_only:
+            filters = """ AND json_extract(payload,'$.is_bot')=0
+                AND trim(json_extract(payload,'$.text'), char(9,10,11,12,13,32))!=''"""
+        order = "DESC" if last is not None else "ASC"
         rows = self.db.execute(
-            """SELECT payload FROM messages WHERE source=? AND account_id=? AND workspace_id=?
-               AND channel_id=? AND thread_id=? ORDER BY timestamp_ms,message_id""",
-            (*key, channel_id, thread_id),
+            f"""SELECT payload FROM messages WHERE source=? AND account_id=? AND workspace_id=?
+               AND channel_id=? AND thread_id=? {filters}
+               ORDER BY timestamp_ms {order},message_id {order} LIMIT ?""",
+            (*key, channel_id, thread_id, last if last is not None else -1),
         )
-        return [json.loads(row[0]) for row in rows]
+        result = [json.loads(row[0]) for row in rows]
+        return result[::-1] if last is not None else result
+
+    def observed_reply(self, key, suggestion):
+        # Only one result crosses the SQLite boundary, even for a busy channel.
+        trigger = self.db.execute(
+            """SELECT timestamp_ms,message_id FROM messages WHERE source=? AND account_id=?
+               AND workspace_id=? AND channel_id=? AND message_id=?""",
+            (*key, suggestion["channel_id"], suggestion["trigger_message_id"]),
+        ).fetchone()
+        row = self.db.execute(
+            """SELECT message_id FROM messages WHERE source=? AND account_id=? AND workspace_id=?
+               AND channel_id=? AND thread_id=? AND timestamp_ms>=?
+               AND (timestamp_ms,message_id)>(?,?)
+               AND json_extract(payload,'$.is_self')=1 AND json_extract(payload,'$.is_bot')=0
+               AND trim(json_extract(payload,'$.text'), char(9,10,11,12,13,32))!=''
+               ORDER BY timestamp_ms,message_id LIMIT 1""",
+            (*key, suggestion["channel_id"], suggestion["thread_id"], suggestion["created_at_ms"],
+             trigger["timestamp_ms"] if trigger else -1, trigger["message_id"] if trigger else ""),
+        ).fetchone()
+        return row[0] if row else None
 
     def suggestions(self, key):
         self.connection(key)
         for row in self.db.execute(
-            """SELECT * FROM suggestions WHERE source=? AND account_id=? AND workspace_id=?
-               ORDER BY id""",
+            """SELECT suggestions.* FROM suggestions JOIN channels
+               USING(source,account_id,workspace_id,channel_id)
+               WHERE source=? AND account_id=? AND workspace_id=? AND selected=1 ORDER BY id""",
             key,
         ):
             item = {**dict(row), "context": json.loads(row["context"]), "usage": "context_only"}
@@ -225,8 +284,10 @@ class Store:
                     "channel_id": row["channel_id"],
                     "scan_in_progress": row["cursor"] is not None,
                     "last_complete_at": row["last_complete_at"],
+                    "selected": bool(row["selected"]),
+                    "last_error": row["last_error"],
                 }
-                for row in self.channels(key)
+                for row in self.channels(key, selected_only=False)
             ],
             "messages": self.db.execute(
                 "SELECT count(*) FROM messages WHERE source=? AND account_id=? AND workspace_id=?",

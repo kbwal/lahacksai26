@@ -113,7 +113,7 @@ command supplies generated text and observed human replies to the app's review/c
 
 See [MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md) for the message contract, channel selection,
 credentials, source labels, provider limits, and outstanding OAuth UI work. The local
-archive has been rebuilt with this command: 133 automated tests passed, relocation and
+archive has been rebuilt with this command: 144 automated tests passed, relocation and
 private-data exclusion checks passed, and the relocated executable generated both Slack
 and Discord suggestions from synthetic context using Qwen3.5-2B on Metal. No live Slack
 or Discord account was accessed. The build discovers MLX's dynamic parsers/templates

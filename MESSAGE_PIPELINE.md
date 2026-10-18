@@ -75,19 +75,30 @@ selected channels, messages and suggestions. Credentials stay in macOS Keychain.
 next cursor commit together. Replaying a page updates the same message instead of adding
 a duplicate. A process lock prevents concurrent sync/disconnect for the same connection.
 Status and exception output omit message text and tokens.
+Channel-local provider/validation failures appear in `status.channels[].last_error` and
+do not block other selected channels or their reply reconciliation. Identity, network and
+rate-limit failures still apply to the connection. Automatic suggestions skip channels
+with a recorded sync failure until their next successful page.
 
 `sync` performs a bounded scan, resuming any incomplete one. `run` repeats it, waiting
-1,800 seconds after each cycle by default. Each completed scan is followed by a new
-history scan, so old Slack threads are revisited even when their new replies are absent
+1,800 seconds after each cycle by default. Slack follows each completed scan with a new
+history scan, so old threads are revisited even when their new replies are absent
 from top-level history. This also refreshes edited text. Slack missing records are removed
 only after a complete history-and-replies scan. A failed page never advances its cursor
 or triggers removal. Expired Slack cursors restart the scan without discarding cached data.
 
+Discord uses a frozen backward scan for its initial import, then reads forward with
+`after` from the newest cached message timestamp. Replaying the final millisecond avoids
+losing messages whose snowflakes share that timestamp; pending pages retain exact IDs.
+Once initial import finishes, cycles fetch new messages rather than rereading all history.
+Edits to older Discord messages are not refreshed by these incremental reads.
+
 This first version favors correctness for a small channel allowlist over high-volume
 efficiency. It is **not a guarantee that every message arrives locally within 30 minutes**:
-large imports and rate limits can take multiple cycles, and messages newer than an ongoing
-scan's starting boundary enter the next scan. `--max-pages` is a per-channel cycle budget;
-status exposes `scan_in_progress` and `last_complete_at`. Production-scale ingestion should
+large imports and rate limits can take multiple cycles, and messages newer than an initial
+Discord import or Slack scan's starting boundary enter the next scan. `--max-pages` is a
+per-channel cycle budget; status exposes `scan_in_progress` and `last_complete_at`.
+Production-scale ingestion should
 add Slack Events API / Discord Gateway create, edit and delete events with periodic
 reconciliation. Discord REST can return an empty history when permission is lost, so this
 version does not infer Discord deletions from absence; cached deleted messages can remain
@@ -119,8 +130,11 @@ uv run python -m gmail_agent messages --source slack --account U123 --workspace 
 
 For an application-owned credential handoff, `connect --token-env VARIABLE_NAME` reads
 an existing environment variable. The argument is the variable name, never the token.
-Reconnecting validates identity and adds selected channels; it does not drop previously
-selected channels. To replace the allowlist, disconnect with `--purge` and connect again.
+Reconnecting validates identity and **replaces** the selected channel list. Deselected
+channels stop syncing and disappear from suggestion output, while their cached messages
+remain available to export until purge. Select them again to resume their saved cursors.
+Status includes all retained channels with a `selected` flag. Existing databases acquire
+the new selection/error columns automatically without losing messages or checkpoints.
 
 This is token-based developer onboarding, **not a finished browser OAuth flow**. For the
 shipped app, implement Slack OAuth installation, state verification, an HTTPS redirect
@@ -190,6 +204,11 @@ supersedes the earlier suggestion, and changed cached context regenerates machin
 The app must keep any human-edited composition separately rather than treating this
 machine suggestion store as an editable draft. Dismissal prevents regeneration for the
 same trigger. Source/channel/thread IDs accompany every suggestion.
+One failed generation is recorded and does not stop attempts for later conversations;
+failed rows retry next cycle. The result includes `generated` and `failed` counts. If all
+attempts fail, the first error still surfaces. Suggestion generation fetches only the last
+three human messages per eligible conversation, and reconciliation queries only the latest
+human message and the first qualifying later reply.
 
 After sync observes a later human-authored reply in the same conversation, it records
 `observed_reply_id` and returns that message with the suggestion. This is a conversation
@@ -222,12 +241,16 @@ Disconnect removes the local Keychain entry. `disconnect --purge` also deletes t
 connection's cached messages and checkpoints; separately exported files remain. It does
 not revoke the token or uninstall the app at the provider. Revoke/uninstall there when
 needed. A running polling process checks Keychain under the sync lock before each cycle.
+If the credential or connection is removed, `run` exits at that check with a nonzero status
+instead of retrying forever; this applies with and without `--purge`.
 
 ## Validation and remaining work
 
 Automated tests use synthetic provider responses for pagination, restart recovery,
 429 backoff, channel/account isolation, source labels, text edits and export permissions.
-All 133 repository tests pass. The rebuilt, relocated macOS executable also generated
+Regression coverage includes isolated channel/model failures, disconnect shutdown, channel
+selection migration, incremental Discord cursor recovery, and bounded context reads.
+All 144 repository tests pass. The rebuilt, relocated macOS executable also generated
 real local Qwen3.5-2B suggestions for synthetic Slack and Discord conversations, preserving
 the source label in each suggestion and its context.
 No live Slack workspace or Discord server has been connected or imported in this change.

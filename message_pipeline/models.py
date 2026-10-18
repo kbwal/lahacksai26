@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from decimal import Decimal
 from email.utils import parseaddr
 
+from gmail_agent.training import from_me
 from message_pipeline import SOURCES
 
 
@@ -51,5 +52,5 @@ def gmail_message(message, account_id):
         author_id=author,
         timestamp_ms=message["internal_date"],
         text=message["body_text"],
-        is_self="SENT" in message["labels"] or author == account_id.lower(),
+        is_self=from_me(message, account_id),
     )

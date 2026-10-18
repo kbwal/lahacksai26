@@ -5,6 +5,27 @@ import time
 
 from gmail_agent.locking import worker_lock
 from message_pipeline.clients import ProviderError, RateLimited
+from message_pipeline.replies import reconcile
+
+
+def sync_channel(store, client, key, channel, max_pages):
+    channel_id = channel["channel_id"]
+    client.validate_channel(channel_id, key[2])
+    since_ms = None
+    if channel["last_complete_at"] is not None:
+        since_ms = store.newest_timestamp(key, channel_id) or 0
+    row = store.begin(key, channel_id, client.initial_state(since_ms))
+    state = json.loads(row["cursor"])
+    for _ in range(max_pages):
+        messages, next_state = client.page(key[1], key[2], channel_id, state)
+        if next_state == state:
+            raise ProviderError("pagination_stalled")
+        store.save_page(
+            key, channel_id, row["generation"], messages, next_state, prune=client.prunes_missing
+        )
+        if next_state is None:
+            break
+        state = next_state
 
 
 def sync_once(store, client, key, *, max_pages=100, credential_check=None):
@@ -18,40 +39,19 @@ def sync_once(store, client, key, *, max_pages=100, credential_check=None):
             return {**store.status(key), "deferred": True}
         try:
             # Recheck identity every cycle so a replaced/revoked token cannot mix workspaces.
-            if key[0] == "slack":
-                if client.identity() != (key[1], key[2]):
-                    raise ValueError(
-                        "Slack token no longer matches the connected account/workspace"
-                    )
-            else:
-                client.identity()
+            client.verify_identity(key[1], key[2])
             for channel in store.channels(key):
                 channel_id = channel["channel_id"]
-                client.validate_channel(channel_id, key[2])
-                row = store.begin(key, channel_id, client.initial_state())
-                state = json.loads(row["cursor"])
-                for _ in range(max_pages):
-                    try:
-                        messages, next_state = client.page(key[1], key[2], channel_id, state)
-                    except ProviderError as error:
-                        if error.code == "invalid_cursor":
-                            # Retain cached data, restart the scan on the next cycle.
-                            with store.db:
-                                store.db.execute(
-                                    """UPDATE channels SET cursor=NULL WHERE source=? AND account_id=?
-                                       AND workspace_id=? AND channel_id=?""",
-                                    (*key, channel_id),
-                                )
-                        raise
-                    if next_state == state:
-                        raise ProviderError("pagination_stalled")
-                    store.save_page(key, channel_id, row["generation"], messages, next_state)
-                    if next_state is None:
-                        break
-                    state = next_state
+                try:
+                    sync_channel(store, client, key, channel, max_pages)
+                except RateLimited:
+                    raise  # Backoff applies to this connection, not just the channel.
+                except (ProviderError, ValueError) as error:
+                    store.fail_channel(
+                        key, channel_id, type(error).__name__,
+                        restart=isinstance(error, ProviderError) and error.code == "invalid_cursor",
+                    )
             with store.db:
-                from message_pipeline.replies import reconcile
-
                 reconcile(store, key)
                 store.db.execute(
                     """UPDATE connections SET last_error=NULL,retry_at=0

@@ -5,13 +5,11 @@ import time
 
 from gmail_agent.locking import AlreadyRunning, worker_lock
 
+CONTEXT_MESSAGES = 3
 
-def human_messages(store, key, channel_id, thread_id):
-    return [
-        item
-        for item in store.conversation(key, channel_id, thread_id)
-        if not item["is_bot"] and item["text"].strip()
-    ]
+
+def human_messages(store, key, channel_id, thread_id, *, last=CONTEXT_MESSAGES):
+    return store.conversation(key, channel_id, thread_id, humans_only=True, last=last)
 
 
 def context_for(messages):
@@ -22,13 +20,13 @@ def context_for(messages):
         "relationship": "unknown",
         "channel_id": latest["channel_id"],
         "thread_id": latest["thread_id"],
-        "message_ids": [item["message_id"] for item in messages[-3:]],
+        "message_ids": [item["message_id"] for item in messages[-CONTEXT_MESSAGES:]],
         "conversation": [
             {"from": "me" if item["is_self"] else "them", "text": item["text"]}
-            for item in messages[-3:]
+            for item in messages[-CONTEXT_MESSAGES:]
         ],
         "thread": "\n\n".join(
-            f"From: {item['author_id']}\n{item['text']}" for item in messages[-3:]
+            f"From: {item['author_id']}\n{item['text']}" for item in messages[-CONTEXT_MESSAGES:]
         ),
     }
 
@@ -36,32 +34,19 @@ def context_for(messages):
 def reconcile(store, key):
     """Caller holds the connection lock and transaction."""
     rows = store.db.execute(
-        """SELECT * FROM suggestions WHERE source=? AND account_id=? AND workspace_id=?
-           AND state IN ('queued','ready','failed')""",
+        """SELECT suggestions.* FROM suggestions JOIN channels
+           USING(source,account_id,workspace_id,channel_id)
+           WHERE source=? AND account_id=? AND workspace_id=? AND selected=1
+           AND channels.last_error IS NULL AND state IN ('queued','ready','failed')""",
         key,
     ).fetchall()
     for row in rows:
-        messages = human_messages(store, key, row["channel_id"], row["thread_id"])
-        trigger_index = next(
-            (
-                index
-                for index, item in enumerate(messages)
-                if item["message_id"] == row["trigger_message_id"]
-            ),
-            None,
-        )
-        observed = next(
-            (
-                item
-                for item in messages[(trigger_index + 1) if trigger_index is not None else 0 :]
-                if item["is_self"] and item["timestamp_ms"] >= row["created_at_ms"]
-            ),
-            None,
-        )
+        messages = human_messages(store, key, row["channel_id"], row["thread_id"], last=1)
+        observed = store.observed_reply(key, row)
         if observed:
             store.db.execute(
                 "UPDATE suggestions SET state='replied',observed_reply_id=? WHERE id=?",
-                (observed["message_id"], row["id"]),
+                (observed, row["id"]),
             )
         elif not messages or messages[-1]["message_id"] != row["trigger_message_id"]:
             store.db.execute("UPDATE suggestions SET state='superseded' WHERE id=?", (row["id"],))
@@ -72,19 +57,28 @@ def generate_suggestions(
 ):
     if bool(channel_id) != bool(thread_id):
         raise ValueError("Select both channel_id and thread_id")
+    if limit < 1:
+        raise ValueError("limit must be positive")
     generated = 0
+    failed = 0
+    first_error = None
     with worker_lock(store.path, json.dumps(key)):
         connection = store.connection(key)
         with store.db:
             reconcile(store, key)
         if channel_id:
+            if channel_id not in {row["channel_id"] for row in store.channels(key)}:
+                raise ValueError("Channel is not selected; reconnect to select it")
             conversations = [(channel_id, thread_id)]
         else:
             conversations = store.db.execute(
-                """SELECT channel_id,thread_id FROM messages
-                   WHERE source=? AND account_id=? AND workspace_id=?
-                   GROUP BY channel_id,thread_id ORDER BY max(timestamp_ms) DESC""",
-                key,
+                """SELECT channel_id,thread_id FROM messages JOIN channels
+                   USING(source,account_id,workspace_id,channel_id)
+                   WHERE source=? AND account_id=? AND workspace_id=? AND selected=1
+                   AND channels.last_error IS NULL
+                   GROUP BY channel_id,thread_id HAVING max(timestamp_ms)>=?
+                   ORDER BY max(timestamp_ms) DESC""",
+                (*key, 0 if include_history else connection["activated_at_ms"]),
             ).fetchall()
         for channel, thread in conversations:
             messages = human_messages(store, key, channel, thread)
@@ -136,16 +130,20 @@ def generate_suggestions(
                 generated += 1
             except AlreadyRunning:
                 break  # The Gmail worker/trainer owns MLX; keep this suggestion queued.
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 -- isolate model failures per conversation
                 with store.db:
                     store.db.execute(
                         "UPDATE suggestions SET state='failed',last_error=? WHERE id=?",
                         (type(error).__name__, suggestion_id),
                     )
-                raise
+                failed += 1
+                if first_error is None:
+                    first_error = error
             if generated >= limit:
                 break
-    return {"source": key[0], "generated": generated}
+    if first_error is not None and generated == 0:
+        raise first_error
+    return {"source": key[0], "generated": generated, "failed": failed}
 
 
 def dismiss(store, key, suggestion_id):

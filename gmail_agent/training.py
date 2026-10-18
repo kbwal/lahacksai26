@@ -3,13 +3,16 @@
 from email.utils import parseaddr
 
 
+def from_me(message, account_email):
+    return "SENT" in message["labels"] or (
+        parseaddr(message["headers"].get("from", ""))[1].lower() == account_email.lower()
+    )
+
+
 def conversation_messages(messages, account_email):
     return [
         {
-            "from": "me"
-            if "SENT" in message["labels"]
-            or parseaddr(message["headers"].get("from", ""))[1].lower() == account_email.lower()
-            else "them",
+            "from": "me" if from_me(message, account_email) else "them",
             "text": message["body_text"],
         }
         for message in messages[-3:]

@@ -10,23 +10,16 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from gmail_agent.__main__ import worker_options
+from gmail_agent.__main__ import positive, worker_options
 from gmail_agent.auth import keychain
 from gmail_agent.locking import worker_lock
 from gmail_agent.runtime import default_paths
 from message_pipeline import SOURCES
 from message_pipeline.clients import client_for
-from message_pipeline.store import Store, export_gmail
+from message_pipeline.store import Disconnected, Store, export_gmail
 from message_pipeline.sync import sync_once
 
 SERVICE = "lahacks-mail.messages"
-
-
-def positive(value):
-    number = int(value)
-    if number < 1:
-        raise argparse.ArgumentTypeError("Must be positive")
-    return number
 
 
 def parser():
@@ -214,13 +207,13 @@ def main(argv=None):
                 else:
                     token = keychain().get_password(SERVICE, connection["credential_ref"])
                     if not token:
-                        raise ValueError("No credential in Keychain; connect again")
+                        raise Disconnected("No credential in Keychain; connect again")
                     client = client_for(args.source, token)
 
                     def credential_check(current):
                         saved = keychain().get_password(SERVICE, current["credential_ref"])
                         if not saved:
-                            raise ValueError("Connection was disconnected; stop this worker")
+                            raise Disconnected("Connection was disconnected; stop this worker")
                         client.session.headers["Authorization"] = f"{client.auth_scheme} {saved}"
 
                     while True:
@@ -234,6 +227,8 @@ def main(argv=None):
                             )
                             if args.suggest_replies and not result["deferred"]:
                                 result["replies"] = suggest_replies(store, args, key)
+                        except Disconnected:
+                            raise
                         except Exception as error:
                             if args.command != "run":
                                 raise

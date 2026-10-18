@@ -159,9 +159,12 @@ def main(argv=None):
         from message_pipeline.__main__ import main as messages_main
 
         return messages_main(argv[1:])
-    args = parser().parse_args(argv)
+    command_parser = parser()
+    args, extra = command_parser.parse_known_args(argv)
     if args.command == "messages":
-        parser().error("Place messages first, followed by its --db, --source and account options")
+        command_parser.error("Place messages first, followed by its --db, --source and account options")
+    if extra:
+        command_parser.error(f"unrecognized arguments: {' '.join(extra)}")
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = None
