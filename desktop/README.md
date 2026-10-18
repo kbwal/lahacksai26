@@ -120,3 +120,23 @@ Settings → **Your details** stores name, email, phone, address, and website lo
 Names recognize `[NAME]`, `[YOUR NAME]`, `[FULL_NAME]`, and `[SENDER NAME]`; email/phone/address recognize their corresponding named fields, and websites fill `[WEBSITE]` or `[PERSONAL WEBSITE]`. Generic `[LINK]` fields remain unresolved because they may refer to a meeting instead of a personal website. Dates, times, amounts, and unknown fields stay for review. Autofill never sends a message. Old snapshots without `personalDetails` remain valid.
 
 The new-message composer puts a persona picker above a prompt box, with an app chip and arrow submit action. **Message details** expands optional recipient, subject, and model controls. Cmd/Ctrl+Enter submits. Changing personas preserves the prompt; the picker lists only personas allowed for the selected app. Generation still uses the existing local worker and the selected persona’s description.
+
+
+## Inbox design
+
+The inbox uses a compact heading, recipient-first rows, and a separate reading
+pane. The serif wordmark is retained; interface headings use the system typeface.
+App colors identify sources and selected drafts. The main message has more visual
+weight than its metadata. Sample data remains labeled, and operational status is
+shown only when the worker supplies it.
+
+At 701–1100 px, navigation becomes an icon rail while the draft list stays beside
+the message. At 700 px and below, choosing a draft opens its reading view; Back to
+drafts restores keyboard focus to the selected row. Search returns to the list.
+Connection setup for Slack/Discord is under Connection and sync, with errors and
+busy state visible in the summary. Settings retains the full controls.
+
+Design references: [NN/g on aesthetic and minimalist design](https://www.nngroup.com/articles/aesthetic-minimalist-design/)
+and [Atlassian on spacing and information hierarchy](https://atlassian.design/foundations/spacing/).
+The changes remove repeated labels, oversized display headings and unsolicited
+entrance animations, while preserving visible focus and reduced-motion support.

@@ -59,16 +59,16 @@ export default function ComposeMessage({personas, initialApp, onClose, onSave}: 
             </button>)}
           </div>}
         </div>
-        <span className="sub">Drafting on your Mac</span>
+        <span className="sub">Writing style</span>
       </div>
-      <div className="compose-intro"><h3>What would you like to say?</h3><p className="sub">A new conversation, in your voice.</p></div>
+      <label className="compose-intro" htmlFor={`${pickerId}-prompt`}>What should the message say?</label>
       <div className="chat-prompt">
-        <textarea data-initial-focus aria-label="Message prompt" rows={5} maxLength={6000} required disabled={busy} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Invite Alex to our project demo next week. Keep it friendly and brief…" onKeyDown={event => {
+        <textarea id={`${pickerId}-prompt`} data-initial-focus aria-label="Message prompt" rows={5} maxLength={6000} required disabled={busy} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Invite Alex to our project demo next week. Keep it friendly and brief…" onKeyDown={event => {
           if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {event.preventDefault(); event.currentTarget.form?.requestSubmit();}
         }} />
         <div className="chat-prompt-toolbar">
           <label className="compose-app" data-app={appId}><AppMark app={appId} size={16} /><select aria-label="Destination app" value={appId} disabled={busy} onChange={e => setApp(e.target.value as AppId)}>{APP_IDS.map(id => <option key={id} value={id}>{APP_NAMES[id]}</option>)}</select></label>
-          <button className="compose-submit primary" type="submit" aria-label={busy ? "Drafting message" : "Generate draft"} disabled={busy || !persona || !prompt.trim() || !window.margin}><ArrowUpIcon size={21} /></button>
+          <button className="compose-submit primary" type="submit" aria-label={busy ? "Drafting message" : "Create draft"} disabled={busy || !persona || !prompt.trim() || !window.margin}><span>{busy ? "Drafting…" : "Create draft"}</span><ArrowUpIcon size={17} /></button>
         </div>
       </div>
       <details className="compose-options"><summary><SlidersHorizontalIcon size={15} />Message details <span className="sub">Optional</span></summary><fieldset disabled={busy} className="compose-fields">
