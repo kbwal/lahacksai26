@@ -22,9 +22,14 @@ def compose_context(payload):
     persona_id = payload.get("personaId")
     if not isinstance(persona_id, str) or not re.fullmatch(r"[\w-]{1,100}", persona_id):
         raise ValueError("Invalid personaId")
+    request = [payload["prompt"].strip()]
+    if payload["recipient"].strip():
+        request.append(f"Recipient: {payload['recipient'].strip()}")
+    if payload["subject"].strip():
+        request.append(f"Subject: {payload['subject'].strip()}")
     return {
         "source": payload["appId"] if payload["appId"] in SOURCES else "",
-        "prompt": payload["prompt"].strip(),
+        "prompt": "\n".join(request),
         "conversation": [],
     }
 

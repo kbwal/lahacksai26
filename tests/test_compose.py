@@ -23,9 +23,14 @@ def payload():
 def test_new_message_is_a_training_format_request(app, source):
     context = compose_context({**payload(), "appId": app})
     conversation = generation_input(context, "professional")
-    assert conversation.prompt == "Invite Alex to the demo. Use [LINK]."
+    assert conversation.prompt == "Invite Alex to the demo. Use [LINK].\nRecipient: Alex\nSubject: Demo"
     assert conversation.messages == []
     assert conversation.source == source
+
+
+def test_empty_optional_details_do_not_change_the_request():
+    context = compose_context({**payload(), "recipient": "  ", "subject": ""})
+    assert context["prompt"] == payload()["prompt"]
 
 
 def test_composer_loads_the_personas_trained_adapter(tmp_path):

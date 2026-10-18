@@ -76,7 +76,7 @@ export default function ComposeMessage({personas, initialApp, onClose, onSave}: 
         <label className="field">Subject<input maxLength={300} value={subject} onChange={e => setSubject(e.target.value)} placeholder="What’s this about?" /></label>
         <label className="row spaced"><input type="checkbox" checked={changeModel} onChange={e => setChangeModel(e.target.checked)} />Choose a different local model</label>
       </fieldset></details>
-      <p className="compose-note sub">Style follows your persona description. Training on your writing history isn’t connected here yet. Review the draft, then copy it into your app.</p>
+      <p className="compose-note sub">Drafts use your persona’s trained style when available. Review the draft, then copy it into your app.</p>
       {!window.margin && <p className="warning spaced">Open Margin on your Mac to generate with a local model.</p>}
       {busy && <p role="status" className="sub spaced">Drafting on your Mac… Loading the model can take a minute.</p>}
       {error && <p role="alert" className="error spaced">{error}</p>}

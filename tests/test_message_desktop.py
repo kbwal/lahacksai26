@@ -11,6 +11,7 @@ from message_pipeline.store import Store
 
 class Generator:
     version = "synthetic"
+    adapter_name = "social"
 
     def generate(self, context):
         return "I can join at [TIME]."
@@ -39,6 +40,7 @@ def test_desktop_snapshot_retains_source_and_thread_without_credentials(tmp_path
         assert draft["chat"]["threadId"] == "33"
         assert draft["chat"]["accountId"] == "11"
         assert draft["body"] == "I can join at [TIME]."
+        assert draft["roleId"] == "social"
         assert "private-credential-reference" not in json.dumps(result)
         assert "private-credential-reference" not in json.dumps(connections(store, source))
         assert draft["externalUrl"].startswith(

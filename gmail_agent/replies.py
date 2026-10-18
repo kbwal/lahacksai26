@@ -280,22 +280,16 @@ class LocalGenerator:
         model_lock=None,
     ):
         self.model_path = Path(model_path).resolve()
-        if adapter_name is not None and not re.fullmatch(r"[\w-]+", adapter_name):
-            raise ValueError("Use --adapter-name with letters, digits, _ or -")
-        if adapter_path is None and adapter_root is not None and adapter_name:
-            # A persona without a trained adapter yet drafts with the plain model.
-            candidate = Path(adapter_root) / adapter_name
-            if (candidate / "adapters.safetensors").is_file():
-                adapter_path = candidate
-        self.adapter_path = Path(adapter_path).resolve() if adapter_path else None
-        self.adapter_name = adapter_name or (
-            self.adapter_path.name if self.adapter_path else "professional"
+        self.adapter_name = (
+            adapter_name if adapter_name is not None
+            else Path(adapter_path).name if adapter_path else "professional"
         )
         if not re.fullmatch(r"[\w-]+", self.adapter_name):
             raise ValueError("Use --adapter-name with letters, digits, _ or -")
-        config = adapter_config(self.adapter_path) if self.adapter_path else {}
-        check_base_model(self.model_path, config)
-        self.arm = resolve_arm(self.model_path, config, arm)
+        self._explicit_adapter_path = Path(adapter_path).resolve() if adapter_path else None
+        self.adapter_root = Path(adapter_root).resolve() if adapter_root is not None else None
+        self._requested_arm = arm
+        self._resolve_adapter()
         self.max_tokens = max_tokens
         self.model_lock = model_lock if model_lock is not None else default_paths()["model_lock"]
         self.model = None
@@ -303,12 +297,25 @@ class LocalGenerator:
         self.stack = ExitStack()
         self.version = "unloaded"
 
+    def _resolve_adapter(self):
+        self.adapter_path = self._explicit_adapter_path
+        if self.adapter_path is None and self.adapter_root is not None:
+            candidate = self.adapter_root / self.adapter_name
+            if (candidate / "adapters.safetensors").is_file():
+                self.adapter_path = candidate
+        config = adapter_config(self.adapter_path) if self.adapter_path else {}
+        check_base_model(self.model_path, config)
+        self.arm = resolve_arm(self.model_path, config, self._requested_arm)
+
     def generate(self, context):
         if self.model is None:
             if not (self.model_path / "config.json").is_file():
                 raise ValueError("Local model path is missing config.json")
             self.stack.enter_context(process_lock(self.model_lock))
             try:
+                # A daemon survives multiple cycles and adapter installs. Resolve and
+                # validate the files again while the installer cannot replace them.
+                self._resolve_adapter()
                 from mlx_lm import load
 
                 self.model, self.tokenizer = load(

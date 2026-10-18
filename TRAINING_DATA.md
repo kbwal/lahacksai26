@@ -32,6 +32,11 @@ uv run python -m train.veri fetch --adapter-root adapters --model models/Qwen3-4
 
 `fetch` reports jobs that are still running and can be rerun. Drop `--veri-submit`
 to only write the datasets and print the cost estimate commands.
+While DPO is pending, `fetch` can install the completed SFT adapter. A new SFT
+submission replaces the previous job chain. If DPO trained on a merged SFT model,
+fetch it with `--model` pointing to a local copy of that merged model, and use
+the same model for drafting; its adapter cannot be applied to the original Qwen
+checkpoint. Installation uses the shared model lock; retry if a worker is busy.
 
 Add `--account you@example.com` if the database contains multiple accounts.
 The output directory must be new; existing exports are never overwritten.

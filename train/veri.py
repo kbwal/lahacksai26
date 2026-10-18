@@ -43,6 +43,8 @@ import tomllib
 from dataclasses import replace
 from pathlib import Path
 
+from gmail_agent.locking import process_lock
+from gmail_agent.runtime import default_paths
 from train.format import Conversation, Edit, ME, masked, masked_edit, preference_example, reply_example
 
 # mlx-lm's LoRA adds scale * x @ A @ B, PEFT adds (alpha / rank) * x @ A @ B.
@@ -202,7 +204,9 @@ def run(args, names: list[str], convs: dict, edits: dict, tokenizer):
                 print(f"  {name} {stage}: job {jobs[stage]} (veri jobs logs {jobs[stage]} -f)")
         if jobs:
             path = out / "jobs.json"
-            old = json.loads(path.read_text()) if path.exists() else {}
+            # A fresh SFT job starts a new chain; a previous DPO result belongs
+            # to the old SFT base and must not take precedence during fetch.
+            old = json.loads(path.read_text()) if path.exists() and "sft" not in jobs else {}
             path.write_text(json.dumps(old | jobs, indent=2) + "\n")
 
 
@@ -221,16 +225,17 @@ def peft_dir(checkpoint: Path) -> Path:
     return found[0]
 
 
-def install(peft: Path, adapter_dir: Path, model: str, arm: str, name: str):
-    """Convert `peft` and swap it into `adapter_dir`, weights first, so a reader never
-    pairs new weights with an older config for longer than one rename."""
+def install(peft: Path, adapter_dir: Path, model: str, arm: str, name: str, *, model_lock=None):
+    """Convert and install under the worker/trainer lock so readers see matching files."""
     from train.peft_to_mlx import convert
 
-    adapter_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=adapter_dir, prefix=".incoming-") as tmp:
-        convert(peft, Path(tmp), model, arm, name)
-        for f in ("adapters.safetensors", "adapter_config.json"):
-            os.replace(Path(tmp) / f, adapter_dir / f)
+    lock = model_lock if model_lock is not None else default_paths()["model_lock"]
+    with process_lock(lock):
+        adapter_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=adapter_dir, prefix=".incoming-") as tmp:
+            convert(peft, Path(tmp), model, arm, name)
+            for f in ("adapters.safetensors", "adapter_config.json"):
+                os.replace(Path(tmp) / f, adapter_dir / f)
 
 
 def fetch(adapter_root: Path, model: str, arm: str, names: list[str] | None = None) -> list[str]:
@@ -243,10 +248,14 @@ def fetch(adapter_root: Path, model: str, arm: str, names: list[str] | None = No
         if names and name not in names:
             continue
         jobs = json.loads(jobs_file.read_text())
-        stage = "dpo" if "dpo" in jobs else "sft"  # DPO starts from SFT, so it is newer
-        status = job_status(jobs[stage])
-        if status != "completed":
+        for stage in ("dpo", "sft"):
+            if stage not in jobs:
+                continue
+            status = job_status(jobs[stage])
+            if status == "completed":
+                break
             print(f"{name}: {stage} job {jobs[stage]} is {status}")
+        else:
             continue
         download = jobs_file.parent / "download"
         _veri("jobs", "download", jobs[stage], "--output-dir", str(download))

@@ -64,6 +64,14 @@ describe("native chat boundary", () => {
     await h.handlers["messages:sync"]({}, "slack", "U1", "T1");
     expect(h.worker.mock.calls[1][0].slice(-3)).toEqual([h.dir, "--persona", "social"]);
   });
+  it("does not sync or draft when every persona excludes the source", async () => {
+    const h = await harness(async () => ({roles: [
+      {id: "professional", excludedApps: ["slack"]}, {id: "social", excludedApps: ["slack"]},
+    ]}));
+    await expect(h.handlers["messages:sync"]({}, "slack", "U1", "T1")).rejects.toThrow("Allow a persona for Slack");
+    expect(h.worker).not.toHaveBeenCalled();
+    expect(h.dialog.showOpenDialog).not.toHaveBeenCalled();
+  });
   it("cancels model selection without syncing or overwriting the inbox", async () => {
     const h = await harness();
     expect(await h.handlers["messages:sync"]({}, "slack", "U1", "T1")).toBeNull();

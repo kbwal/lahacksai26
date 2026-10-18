@@ -14,8 +14,10 @@ function validId(value) {
 async function personaFor(getWorkspace, source) {
   if (!getWorkspace) return null;
   const roles = (await getWorkspace()).roles || [];
-  const role = roles.find(r => !(r.excludedApps || []).includes(source)) || roles[0];
-  return role && /^[\w-]{1,100}$/.test(role.id) ? role.id : null;
+  const role = roles.find(r => !(r.excludedApps || []).includes(source));
+  if (!role || !/^[\w-]{1,100}$/.test(role.id))
+    throw new Error(`Allow a persona for ${source === "slack" ? "Slack" : "Discord"} in Settings before drafting.`);
+  return role.id;
 }
 
 function registerMessages({ app, ipcMain, dialog, trusted, getWindow, getWorkspace, worker }) {
@@ -66,6 +68,7 @@ function registerMessages({ app, ipcMain, dialog, trusted, getWindow, getWorkspa
     if (busy.has(source)) throw new Error("This app is already syncing.");
     busy.add(source);
     try {
+      const persona = await personaFor(getWorkspace, source);
       const args = await selectedArgs(source, account, workspace);
       const modelConfig = path.join(app.getPath("userData"), "compose-model.json");
       let modelPath;
@@ -84,7 +87,6 @@ function registerMessages({ app, ipcMain, dialog, trusted, getWindow, getWorkspa
       }
       if (typeof modelPath !== "string" || !path.isAbsolute(modelPath)) throw new Error("Choose an absolute local model folder.");
       // The worker loads <adapters>/<persona> when that persona has been trained.
-      const persona = await personaFor(getWorkspace, source);
       await invoke([...args, "sync", "--max-pages", "5", "--suggest-replies",
         "--draft-limit", "3", "--model", modelPath, ...(persona ? ["--persona", persona] : [])]);
       return invoke([...args, "inbox"]);

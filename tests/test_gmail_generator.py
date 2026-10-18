@@ -239,6 +239,45 @@ def test_persona_loads_its_adapter_from_the_root_when_trained(tmp_path):
         LocalGenerator(tmp_path / "m", adapter_root=root, adapter_name="../social")
 
 
+def test_default_persona_loads_professional_adapter(tmp_path):
+    root = tmp_path / "adapters"
+    professional = adapter(root, "professional", arm="base")
+    generator = LocalGenerator(tmp_path / "m", adapter_root=root)
+    assert generator.adapter_name == "professional"
+    assert generator.adapter_path == professional
+    assert generator.arm == "base"
+
+
+def test_daemon_discovers_new_adapter_and_revalidates_replacements(model_runtime, monkeypatch):
+    import json
+
+    generator, loaded, _, _ = model_runtime
+    root = generator.model_path.parent / "adapters"
+    generator.adapter_root = root
+    calls = []
+    original_load = sys.modules["mlx_lm"].load
+
+    def load(model, *, adapter_path):
+        calls.append(adapter_path)
+        return original_load(model, adapter_path=adapter_path)
+
+    monkeypatch.setattr(sys.modules["mlx_lm"], "load", load)
+    context = {"conversation": [{"from": "them", "text": "Hello"}]}
+    generator.generate(context)
+    generator.close()
+    professional = adapter(root, "professional", arm="base", model=str(generator.model_path))
+    generator.generate(context)
+    assert calls == [None, str(professional)]
+    assert generator.arm == "base"
+    generator.close()
+    (professional / "adapter_config.json").write_text(json.dumps({"model": "wrong-base"}))
+    with pytest.raises(ValueError, match="trained on wrong-base"):
+        generator.generate(context)
+    assert len(loaded) == 2
+    with process_lock(generator.model_lock):
+        pass
+
+
 def test_drafting_context_is_cleaned_like_training_data():
     from gmail_agent.replies import context_for
 
