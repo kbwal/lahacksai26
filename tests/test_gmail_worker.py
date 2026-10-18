@@ -349,6 +349,11 @@ def test_human_draft_appearing_during_generation_is_preserved(setup):
     generator.on_generate = human_draft
     run_cycle(store, client, account, generator)
     assert not client.creates
+    assert len(generator.calls) == 1
+    assert client.draft_list_reads == 1
+    assert store.draft_ids(account, "thread-1") == []  # Still the earlier index.
+    assert client.drafts["human"]["body_text"] == "Can we meet?"
+    assert store.draft(1)["state"] == "superseded"
 
 
 def test_expired_history_resync_preserves_existing_reply_record(setup):
@@ -445,6 +450,41 @@ def test_schedule_defaults_to_30_minutes_and_retries_after_error(setup, monkeypa
     monkeypatch.setattr("gmail_agent.worker.run_cycle", fail)
     run_forever(store, FakeGmail(), account, generator, stop=Stop())
     assert 1799 < delays[0] <= 1800
+
+
+def test_busy_worker_retries_after_jitter_then_returns_to_normal_schedule(setup, monkeypatch):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    delays = []
+    calls = []
+    original = generator.generate
+
+    def generate(context):
+        calls.append(context)
+        if len(calls) == 1:
+            raise AlreadyRunning("another account is generating")
+        return original(context)
+
+    class Stop:
+        def is_set(self):
+            return len(delays) == 2
+
+        def wait(self, delay):
+            delays.append(delay)
+
+    def jitter(low, high):
+        assert (low, high) == (60, 300)
+        return 120
+
+    monkeypatch.setattr(generator, "generate", generate)
+    monkeypatch.setattr("gmail_agent.worker.random.uniform", jitter)
+    run_forever(store, client, account, generator, stop=Stop())
+    assert delays[0] == 120
+    assert 1799 < delays[1] <= 1800
+    assert store.draft(1)["attempts"] == 1
+    assert store.draft(1)["state"] == "published"
+    assert len(client.creates) == 1
+    assert generator.closes == 2
 
 
 def test_cycle_health_persists_failure_without_private_error_text(setup, monkeypatch):
@@ -617,6 +657,23 @@ def test_separate_sent_reply_does_not_become_feedback_for_surviving_draft(setup)
     assert len(client.creates) == 2
 
 
+def test_sent_generation_keeps_feedback_when_new_human_draft_exists(setup):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    run_cycle(store, client, account, generator)
+    client.send("draft-1", body=generator.text)
+    human = message("new-human-draft", timestamp=1400, labels=["DRAFT"], body="Another thought")
+    client.drafts["human"] = human
+    client.add(human)
+    run_cycle(store, client, account, generator)
+    assert store.draft(1)["state"] == "sent"
+    feedback = next(store.feedback(account))
+    assert feedback["final_text"] == generator.text
+    assert not feedback["changed"]
+    assert client.drafts["human"] == human
+    assert len(client.creates) == 1
+
+
 def test_unconfirmed_publication_is_not_assumed_sent(setup):
     store, account, generator = setup
     client = FakeGmail([message()])
@@ -749,6 +806,7 @@ def test_feedback_exports_training_edit_with_exact_saved_context(setup):
     assert feedback["draft"] == "[DATE] works for me."
     assert feedback["final"] == "Tomorrow works for me."
     assert feedback["type"] == "train"
+    assert feedback["source"] == feedback["context"]["source"] == "gmail"
     if hasattr(training_format, "Edit"):
         edit = training_format.Edit.from_dict(feedback)
         assert edit.adapter_name == generator.adapter_name
@@ -767,6 +825,7 @@ def test_legacy_feedback_reconstructs_only_saved_message_ids(setup):
     context = json.loads(store.draft(1)["context"])
     del context["conversation"]
     del context["adapter_name"]
+    del context["source"]
     with store.db:
         store.set_state(1, "published", context=json.dumps(context))
     client.send("draft-1")
@@ -774,4 +833,5 @@ def test_legacy_feedback_reconstructs_only_saved_message_ids(setup):
     run_cycle(store, client, account, generator)
     feedback = next(store.feedback(account))
     assert feedback["adapter_name"] == "default"
+    assert feedback["source"] == feedback["context"]["source"] == "gmail"
     assert feedback["conversation"] == [{"from": "them", "text": "Can we meet?"}]

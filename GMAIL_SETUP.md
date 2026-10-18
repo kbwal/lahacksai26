@@ -79,9 +79,9 @@ The default is the downloaded instruct model, with no personalized adapter. To u
 
 The persona name defaults to the adapter directory name (or `default` with no adapter). Use `--adapter-name social` to override it, including during `service install`; the name is saved with each generation for training feedback.
 
-For the base arm, pass `--model models/Qwen3.5-2B-Base --arm base` and its matching adapter. The worker releases its model and lock after each cycle, so training can run during idle periods; the next generation loads the updated weights. Worker and training commands default to `~/Library/Application Support/lahacksai26/data/model.lock`, even in development. `LAHACKS_MAIL_HOME` selects an isolated data home and lock; use the same environment or explicit `--model-lock /absolute/path` in every cooperating process. Training fails safely while another process owns the lock; worker generation defers without consuming retries. Hold that lock or stop the workers before manually replacing model/adapter files.
+For the base arm, pass `--model models/Qwen3.5-2B-Base --arm base` and its matching adapter. The worker releases its model and lock after each cycle, so training can run during idle periods; the next generation loads the updated weights. Worker and training commands default to `~/Library/Application Support/lahacksai26/data/model.lock`, even in development. `LAHACKS_MAIL_HOME` selects an isolated data home and lock; use the same environment in training and the worker. The training commands use this shared default in their `__main__` wrappers; the worker’s optional `--model-lock` must match it. Training fails safely while another process owns the lock; worker generation defers without consuming retries and checks again after a randomized 1–5 minutes, capped by the configured interval. Hold that lock or stop the workers before manually replacing model/adapter files.
 
-With multiple connected accounts, put `--account you@example.com` before the subcommand. Worker locks are per account, so independent continuous workers can share the database. They share a model lock to prevent simultaneous Metal model use. Stop all workers sharing the database before OAuth reconnect; other manual account operations require stopping only that account’s worker. Global `--db` also precedes the subcommand.
+With multiple connected accounts, put `--account you@example.com` before the subcommand. Worker locks are per account, so independent continuous workers can share the database. They share a model lock to prevent simultaneous Metal model use. Stop only the target account’s worker before reconnect or other manual account operations. Pass `--account you@example.com` before `connect` to lock that account before opening Google sign-in and reject a different selected Google account. Without `--account`, the lock is acquired after Google identifies the account and before saving credentials. Global `--db` also precedes the subcommand.
 
 ## 4. Verify in Gmail
 
@@ -97,7 +97,7 @@ Stop the service before this manual exercise and start it afterward.
    .venv/bin/python -m gmail_agent export-feedback --output data/feedback-first-test.jsonl
    ```
 
-The export includes private, unmasked email text and never overwrites an existing file. It is input for the planned cleaning/training pipeline, not a ready-to-train dataset. Thread correspondence intentionally does not prove that a sent reply came from the exact generated draft.
+The export includes private, unmasked email text and never overwrites an existing file. It is written privately to a temporary file and published atomically only after every record succeeds; a failed export leaves no partial destination or temporary file. The JSONL uses the training branch’s `Edit` format; its masking pipeline handles the unmasked text. Thread correspondence intentionally does not prove that a sent reply came from the exact generated draft.
 
 ## Recovery and status
 

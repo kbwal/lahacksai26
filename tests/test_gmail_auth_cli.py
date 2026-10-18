@@ -8,6 +8,7 @@ from google.auth.exceptions import TransportError
 
 from gmail_agent import auth
 from gmail_agent.__main__ import main, parser
+from gmail_agent.locking import AlreadyRunning, worker_lock
 from gmail_agent.store import Store
 
 
@@ -195,3 +196,105 @@ def test_feedback_export_writes_private_file_and_does_not_overwrite(tmp_path):
     target.write_text("keep me")
     assert main(["--db", str(path), "export-feedback", "--output", str(target)]) == 1
     assert target.read_text() == "keep me"
+
+
+def test_failed_feedback_export_leaves_no_partial_file_and_can_retry(tmp_path, monkeypatch):
+    path = tmp_path / "mail.db"
+    store = Store(path)
+    with store.db:
+        store.add_account("me@example.com", "reference", 100)
+    store.close()
+    target = tmp_path / "feedback.jsonl"
+
+    def broken(*_):
+        yield {"draft": "first record"}
+        assert not target.exists()
+        raise ValueError("Cannot reconstruct the saved feedback conversation")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Store, "feedback", broken)
+        assert main(["--db", str(path), "export-feedback", "--output", str(target)]) == 1
+    assert not target.exists()
+    assert not list(tmp_path.glob(".feedback-*"))
+    assert main(["--db", str(path), "export-feedback", "--output", str(target)]) == 0
+    assert target.exists()
+
+
+def test_feedback_export_does_not_overwrite_a_file_created_mid_export(tmp_path, monkeypatch):
+    path = tmp_path / "mail.db"
+    store = Store(path)
+    with store.db:
+        store.add_account("me@example.com", "reference", 100)
+    store.close()
+    target = tmp_path / "feedback.jsonl"
+
+    def feedback(*_):
+        yield {"draft": "generated"}
+        target.write_text("another writer")
+
+    monkeypatch.setattr(Store, "feedback", feedback)
+    assert main(["--db", str(path), "export-feedback", "--output", str(target)]) == 1
+    assert target.read_text() == "another writer"
+    assert not list(tmp_path.glob(".feedback-*"))
+
+
+@pytest.fixture
+def connection(tmp_path, monkeypatch):
+    db = tmp_path / "mail.db"
+    authorized = []
+    saved = []
+
+    def authorize(_):
+        authorized.append(True)
+        return "me@example.com", SimpleNamespace(to_json=lambda: "private credentials")
+
+    def save(*args):
+        with pytest.raises(AlreadyRunning), worker_lock(db, "me@example.com"):
+            pass
+        saved.append(args)
+
+    monkeypatch.setattr(auth, "authorize", authorize)
+    monkeypatch.setattr(auth, "keychain", lambda: SimpleNamespace(set_password=save))
+    return db, authorized, saved
+
+
+@pytest.mark.parametrize("requested", [None, "ME@example.com"])
+def test_connect_only_requires_its_own_account_to_be_stopped(connection, requested, capsys):
+    db, authorized, saved = connection
+    argv = ["--db", str(db)]
+    if requested:
+        argv.extend(["--account", requested])
+    with worker_lock(db, "other@example.com"):
+        assert main([*argv, "connect", "--client-secrets", "/not-read"]) == 0
+    assert authorized == [True]
+    assert saved[0][:2] == (auth.SERVICE, "me@example.com")
+    assert "private credentials" not in capsys.readouterr().out
+    store = Store(db)
+    try:
+        assert store.account("me@example.com")["credential_ref"] == "me@example.com"
+    finally:
+        store.close()
+
+
+def test_reconnect_refuses_running_target_before_authorizing(connection):
+    db, authorized, saved = connection
+    with worker_lock(db, "me@example.com"), pytest.raises(AlreadyRunning):
+        auth.connect(Path("/not-read"), db_path=db, expected_account="me@example.com")
+    assert not authorized
+    assert not saved
+
+
+def test_unselected_connection_checks_discovered_account_before_saving(connection):
+    db, authorized, saved = connection
+    with worker_lock(db, "me@example.com"), pytest.raises(AlreadyRunning):
+        auth.connect(Path("/not-read"), db_path=db)
+    assert authorized == [True]
+    assert not saved
+
+
+def test_reconnect_rejects_wrong_google_account_without_saving(connection):
+    db, authorized, saved = connection
+    with pytest.raises(ValueError, match="does not match"):
+        auth.connect(Path("/not-read"), db_path=db, expected_account="other@example.com")
+    assert authorized == [True]
+    assert not saved

@@ -15,7 +15,7 @@ Companion to [PROJECT.md](PROJECT.md). Target machine: Apple M2, 16 GB unified m
 ## 2. Base vs. instruct experiment
 
 - Both arms get the same data, LoRA config (rank 16, last 16 layers), learning rate, steps and seed. Only the prompt rendering differs (see [train/format.py](train/format.py)):
-  - **Base:** the raw PROJECT.md prompt (`To: … / Thread: … / Reply:`), then the reply and `<|endoftext|>`.
+  - **Base:** the source-labelled prompt (`Source: … / To: … / Thread: … / Reply:`), then the reply and `<|endoftext|>`.
   - **Instruct:** the same text as the user turn, plus a one-line system prompt, through the chat template.
 - **Why a custom trainer:** mlx-lm's `completions` format always applies the chat template, which breaks the base arm. mlx-lm also has no DPO. So we build the examples ourselves and reuse its training loop. DPO will be a small custom loss, using the base model with the adapter turned off as the reference.
 - **Split:** by time. The newest ~10% of sent replies are held out.
@@ -50,6 +50,16 @@ Gmail API ↔ local gmail_agent/ worker ↔ data/mail.db (SQLite)
 - **UI scope:** this component works through native Gmail drafts. A custom inbox, extension, calendar fill UI and universal placeholder send guard are separate product work. Gmail's native Send action is not controlled by this worker.
 
 ## 4. Data pipeline
+
+Gmail, Slack and Discord share a source-labelled message contract described in
+[MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md). `message_pipeline/` adds selected-channel
+Slack/Discord imports, durable pagination and a 30-minute polling command. Every
+normalized message carries `source`, account/workspace/channel IDs, and a thread ID.
+Gmail exports and draft feedback carry `source: "gmail"`, including legacy records.
+Chat exports and observed reply feedback are context-only and do not automatically enter
+the training flow below. Slack/Discord local reply suggestions are available through the
+worker's JSON interface; connection/review UI and hosted OAuth exchange remain application
+work. Gmail remains the only native draft integration.
 
 1. **Ingest:** the Gmail worker imports historical messages and periodic changes into SQLite, preserving Gmail thread IDs and the `SENT` label. Takeout remains an optional import path; its sent labels and thread IDs must be normalized before merging with API data.
 2. **Filter:** drop messages with `List-Unsubscribe`, `Precedence: bulk|list`, `Auto-Submitted`, or a `noreply` sender.

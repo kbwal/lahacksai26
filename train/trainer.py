@@ -19,14 +19,20 @@ from mlx_lm.tuner.trainer import TrainingArgs, train
 from mlx_lm.tuner.utils import linear_to_lora_layers
 from mlx_lm.utils import save_config
 
-from gmail_agent.locking import process_lock
-from gmail_agent.runtime import default_paths
 from train.format import ARMS, Pair, training_example
 
 
 def load_examples(tokenizer, path: str, arm: str) -> list[tuple[list[int], int]]:
+    examples = []
     with open(path) as f:
-        return [training_example(tokenizer, Pair.from_dict(json.loads(l)), arm) for l in f if l.strip()]
+        for line in f:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if item.get("usage") == "context_only":
+                raise ValueError("Context-only message exports cannot be used as training data")
+            examples.append(training_example(tokenizer, Pair.from_dict(item), arm))
+    return examples
 
 
 def main():
@@ -43,49 +49,51 @@ def main():
     ap.add_argument("--num-layers", type=int, default=16)
     ap.add_argument("--max-seq-length", type=int, default=2048)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--model-lock", type=Path, default=default_paths()["model_lock"])
     args = ap.parse_args()
 
-    with process_lock(args.model_lock):
-        mx.random.seed(args.seed)
-        model, tokenizer = load(args.model)
-        train_set = load_examples(tokenizer, args.train, args.arm)
-        valid_set = load_examples(tokenizer, args.valid, args.arm) if args.valid else None
+    mx.random.seed(args.seed)
+    model, tokenizer = load(args.model)
+    train_set = load_examples(tokenizer, args.train, args.arm)
+    valid_set = load_examples(tokenizer, args.valid, args.arm) if args.valid else None
 
-        lora_parameters = {"rank": args.rank, "scale": 20.0, "dropout": 0.0}
-        model.freeze()
-        linear_to_lora_layers(model, args.num_layers, lora_parameters)
+    lora_parameters = {"rank": args.rank, "scale": 20.0, "dropout": 0.0}
+    model.freeze()
+    linear_to_lora_layers(model, args.num_layers, lora_parameters)
 
-        adapter_path = Path(args.adapter_path)
-        adapter_path.mkdir(parents=True, exist_ok=True)
-        # First three keys are what mlx_lm.load(..., adapter_path=...) reads back.
-        save_config(
-            {
-                "fine_tune_type": "lora",
-                "num_layers": args.num_layers,
-                "lora_parameters": lora_parameters,
-                "model": args.model,
-                "arm": args.arm,
-            },
-            adapter_path / "adapter_config.json",
-        )
+    adapter_path = Path(args.adapter_path)
+    adapter_path.mkdir(parents=True, exist_ok=True)
+    # First three keys are what mlx_lm.load(..., adapter_path=...) reads back.
+    save_config(
+        {
+            "fine_tune_type": "lora",
+            "num_layers": args.num_layers,
+            "lora_parameters": lora_parameters,
+            "model": args.model,
+            "arm": args.arm,
+        },
+        adapter_path / "adapter_config.json",
+    )
 
-        train(
-            model=model,
-            optimizer=optim.Adam(learning_rate=args.learning_rate),
-            train_dataset=train_set,
-            val_dataset=valid_set,
-            args=TrainingArgs(
-                batch_size=args.batch_size,
-                iters=args.iters,
-                steps_per_eval=50 if valid_set else args.iters + 1,
-                steps_per_save=args.iters,
-                adapter_file=str(adapter_path / "adapters.safetensors"),
-                max_seq_length=args.max_seq_length,
-                grad_checkpoint=True,
-            ),
-        )
+    train(
+        model=model,
+        optimizer=optim.Adam(learning_rate=args.learning_rate),
+        train_dataset=train_set,
+        val_dataset=valid_set,
+        args=TrainingArgs(
+            batch_size=args.batch_size,
+            iters=args.iters,
+            steps_per_eval=50 if valid_set else args.iters + 1,
+            steps_per_save=args.iters,
+            adapter_file=str(adapter_path / "adapters.safetensors"),
+            max_seq_length=args.max_seq_length,
+            grad_checkpoint=True,
+        ),
+    )
 
 
 if __name__ == "__main__":
-    main()
+    from gmail_agent.locking import process_lock
+    from gmail_agent.runtime import default_paths
+
+    with process_lock(default_paths()["model_lock"]):
+        main()

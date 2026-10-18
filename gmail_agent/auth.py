@@ -3,6 +3,7 @@
 import json
 import logging
 import sys
+from contextlib import nullcontext
 
 import requests
 from google.auth.transport.requests import AuthorizedSession
@@ -10,6 +11,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 from gmail_agent.client import GmailClient
+from gmail_agent.locking import worker_lock
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.readonly",
@@ -32,7 +34,7 @@ class _KeychainCredentials(Credentials):
         keychain().set_password(SERVICE, self.credential_ref, self.to_json())
 
 
-def connect(client_secrets):
+def authorize(client_secrets):
     config = json.loads(client_secrets.read_text())
     if "installed" not in config:
         raise ValueError("Use a Google Desktop OAuth client JSON, not a web client")
@@ -60,7 +62,19 @@ def connect(client_secrets):
     finally:
         session.close()
     email = profile["emailAddress"].lower()
-    keychain().set_password(SERVICE, email, credentials.to_json())
+    return email, credentials
+
+
+def connect(client_secrets, *, db_path=None, expected_account=None):
+    expected_account = expected_account.lower() if expected_account else None
+    # A reconnect can identify and lock its account before opening the browser.
+    with worker_lock(db_path, expected_account) if db_path and expected_account else nullcontext():
+        email, credentials = authorize(client_secrets)
+        if expected_account and email != expected_account:
+            raise ValueError("Google account does not match --account; credentials were not saved")
+        # On first connection, the account is only known after reading the profile.
+        with worker_lock(db_path, email) if db_path and not expected_account else nullcontext():
+            keychain().set_password(SERVICE, email, credentials.to_json())
     return email
 
 

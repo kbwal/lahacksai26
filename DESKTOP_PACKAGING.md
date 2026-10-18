@@ -27,7 +27,7 @@ macOS Keychain                  # per-account access and refresh tokens
 
 The executable and `_internal` must move together. Do not copy only the executable. No mailbox, OAuth configuration, tokens, adapters, or model weights are included in the archive. Installing a new app version replaces code; it does not replace the data home. Removing the login service retains user data.
 
-The bundled worker defaults to the Application Support location above, independent of its working directory. The app can set the absolute environment variable `LAHACKS_MAIL_HOME` to select another home. `--db`, `--model`, `--adapter-path`, and `--model-lock` override individual paths. `--adapter-name` selects the training persona label when it differs from the adapter directory name (otherwise `default` without an adapter). Development database/model paths retain their repository-relative defaults unless `LAHACKS_MAIL_HOME` is set. The model lock defaults to the same absolute Application Support path in development and bundled processes, independent of the working directory. Training commands also accept `--model-lock`; use matching overrides or `LAHACKS_MAIL_HOME` everywhere. Existing installations are not silently migrated; stop the old worker and explicitly reuse its absolute paths, or migrate the database with a SQLite backup before switching ownership.
+The bundled worker defaults to the Application Support location above, independent of its working directory. The app can set the absolute environment variable `LAHACKS_MAIL_HOME` to select another home. `--db`, `--model`, `--adapter-path`, and `--model-lock` override individual paths. `--adapter-name` selects the training persona label when it differs from the adapter directory name (otherwise `default` without an adapter). Development database/model paths retain their repository-relative defaults unless `LAHACKS_MAIL_HOME` is set. The model lock defaults to the same absolute Application Support path in development and bundled processes, independent of the working directory. Training entrypoints use `runtime.default_paths()["model_lock"]`; use the same `LAHACKS_MAIL_HOME` in training and the worker when selecting an alternate home. Existing installations are not silently migrated; stop the old worker and explicitly reuse its absolute paths, or migrate the database with a SQLite backup before switching ownership.
 
 ## App-to-worker interface, version 1
 
@@ -55,7 +55,7 @@ Choose **one** supervisor per account in a given database:
 - **App-owned process:** launch `run`, continuously drain stderr, and retain the process handle. Send SIGTERM to request shutdown. The worker finishes its current cycle before exiting; allow a grace period because an API retry or model generation can take time. If the app must force termination, the SQLite checkpoints and uncertain-publication state are used on the next launch. Do not report shutdown complete until the process actually exits. Detect unexpected exit and restart with backoff. Closing the UI must either stop the child or intentionally hand background ownership to a login helper.
 - **Login service:** the existing `service install/start/stop/status/uninstall` commands manage one LaunchAgent per account and macOS user. Pass global `--account` to select the service when multiple are installed. A bundled installation records the executable's absolute path, not `python -m gmail_agent`, and does not depend on the checkout or virtualenv. Install it only after the app is at its stable installation path. Do not also start an app-owned `run` process. The process lock rejects duplicates.
 
-Read-only `status` may run while the worker is active. Stop the account’s supervisor before `disconnect`, `backfill`, `once`, or `recover`; stop all workers sharing the database before `connect`. Each cycle releases model weights, the Metal cache, and the model lock, allowing training between cycles. A busy model leaves generation queued without using its failure budget. The next cycle loads updated weights. Hold the shared model lock or stop workers before manually replacing model files; restart the supervisor after an app update. When moving an app that has an installed LaunchAgent, uninstall the old service before moving and reinstall from the final path. A production app can adopt Apple's supported login-helper registration as part of its app lifecycle; the current CLI service remains a development/direct-distribution integration.
+Read-only `status` may run while the worker is active. Stop the account’s supervisor before `connect`, `disconnect`, `backfill`, `once`, or `recover`. For reconnect, pass global `--account`; other accounts can keep running, and choosing a different Google account is rejected before credentials are saved. Each cycle releases model weights, the Metal cache, and the model lock, allowing training between cycles. A busy model leaves generation queued without using its failure budget and retries after a randomized 1–5 minutes (or sooner if the configured interval is shorter). The next cycle loads updated weights. Hold the shared model lock or stop workers before manually replacing model files; restart the supervisor after an app update. When moving an app that has an installed LaunchAgent, uninstall the old service before moving and reinstall from the final path. A production app can adopt Apple's supported login-helper registration as part of its app lifecycle; the current CLI service remains a development/direct-distribution integration.
 
 ## Build and verify
 
@@ -109,3 +109,22 @@ Margin also uses these finite JSON commands (global `--db`/`--account` still pre
 - `desktop-send`: read one reviewed send request from stdin and return `sent` or `uncertain`. Tokens remain inside the sidecar; native IPC never exposes a general command runner.
 
 Only the explicit desktop send path transmits mail, following a native recipient/body confirmation. Scheduled workers never send. The desktop boundary journals attempts durably, rejects stale remote snapshots, enforces unresolved-placeholder guards and requires Gmail for attachments or Cc/Bcc. Uncertain attempts are never replayed automatically. `desktop/README.md` documents selecting an existing Gmail database and using the UI.
+
+## Additional message sources
+
+The same executable exposes `messages --help` for Slack/Discord ingestion and unified
+message exports. For example, `lahacks-mail-worker messages --source slack --account U123
+--workspace T123 run --suggest-replies` emits one JSON status object per cycle and defaults to a 30-minute
+interval. The app should supervise this process separately from the Gmail drafting process.
+It uses `data/messages.db` under the same app home and a separate Keychain service.
+No extra runtime dependency or model process is needed for ingestion. Optional suggestions
+use the bundled MLX runtime and the shared model lock. The `messages ... suggestions`
+command supplies generated text and observed human replies to the app's review/copy UI.
+
+See [MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md) for the message contract, channel selection,
+credentials, source labels, provider limits, and outstanding OAuth UI work. The local
+archive has been rebuilt with this command: 144 automated tests passed, relocation and
+private-data exclusion checks passed, and the relocated executable generated both Slack
+and Discord suggestions from synthetic context using Qwen3.5-2B on Metal. No live Slack
+or Discord account was accessed. The build discovers MLX's dynamic parsers/templates
+from wheel metadata so packaging does not depend on GPU access during module discovery.

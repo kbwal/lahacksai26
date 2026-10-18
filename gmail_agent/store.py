@@ -174,6 +174,7 @@ class Store:
     def decode_message(row):
         return {
             **dict(row),
+            "source": "gmail",
             "id": row["message_id"],
             "labels": json.loads(row["labels"]),
             "headers": json.loads(row["headers"]),
@@ -258,6 +259,7 @@ class Store:
             (account_id,),
         ).fetchone()
         return {
+            "source": "gmail",
             "account": account["email"],
             "backfill_complete": bool(account["backfill_complete"]),
             "history_id": account["history_id"],
@@ -301,6 +303,7 @@ class Store:
         )
         for row in rows:
             context = json.loads(row["context"])
+            context["source"] = "gmail"
             conversation = context.get("conversation")
             if conversation is None:
                 # Older records saved message IDs and a flattened Pair prompt.
@@ -318,6 +321,7 @@ class Store:
             generated = comparable_body(row["generated_text"])
             final = comparable_body(row["final_text"])
             yield {
+                "source": "gmail",
                 "adapter_name": context.get("adapter_name", "default"),
                 "conversation": conversation,
                 "draft": generated,

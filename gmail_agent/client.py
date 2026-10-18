@@ -107,6 +107,7 @@ def normalize_message(message):
         name = header["name"].lower()
         headers[name] = ", ".join(filter(None, [headers.get(name), header["value"]]))
     return {
+        "source": "gmail",
         "id": message["id"],
         "thread_id": message["threadId"],
         "internal_date": int(message["internalDate"]),

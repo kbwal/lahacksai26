@@ -55,6 +55,7 @@ def context_for(trigger, messages, account_email):
         for m in messages[-3:]
     )
     return {
+        "source": "gmail",
         "recipient": reply_recipient(trigger),
         "relationship": "unknown",
         "thread": text,
@@ -96,7 +97,7 @@ def reconcile(store, account_id):
                 # A send can race the cycle's draft listing. Wait for the next
                 # index rather than misclassifying the newer thread snapshot.
                 continue
-            if draft["state"] == "publishing" or surviving_draft:
+            if draft["state"] == "publishing" or indexed_draft:
                 # A separate reply is not evidence that this suggestion was used.
                 # Preserve the remote draft: it may contain the person's edits.
                 store.set_state(
@@ -189,6 +190,7 @@ def process_pending(store, client, account_id, generator, *, limit=20):
         (account_id, limit),
     ).fetchall()
     published = 0
+    model_busy = False
     for item in rows:
         draft_id = item["id"]
         try:
@@ -231,6 +233,7 @@ def process_pending(store, client, account_id, generator, *, limit=20):
                 store.set_state(
                     draft_id, "queued", attempts=row["attempts"] - 1, last_error="Model is busy"
                 )
+            model_busy = True
             break
         except PublishUncertain:
             with store.db:
@@ -245,7 +248,7 @@ def process_pending(store, client, account_id, generator, *, limit=20):
                 state = "failed"
             with store.db:
                 store.set_state(draft_id, state, last_error=type(error).__name__)
-    return published
+    return {"published": published, "model_busy": model_busy}
 
 
 class LocalGenerator:
