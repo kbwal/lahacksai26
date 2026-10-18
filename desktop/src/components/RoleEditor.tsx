@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type FormEvent } from "react";
-import { Layers } from "lucide-react";
+import { StackIcon as Layers } from "@phosphor-icons/react";
 import type { AppConnection, AppId, Persona } from "../types";
 import Modal from "./Modal";
 import { roleFormErrors } from "../lib/domain";

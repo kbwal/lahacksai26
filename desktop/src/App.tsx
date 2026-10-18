@@ -1,23 +1,22 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
-  ArrowUpRight,
-  Check,
-  Clock3,
-  Feather,
-  FilePenLine,
-  HardDrive,
-  Layers,
-  Mail,
-  Pencil,
-  Plus,
-  Settings,
-  Sparkles,
-  UsersRound,
-  Upload,
-  Hash,
-  AlertCircle,
-  ChevronRight,
-} from "lucide-react";
+  ArrowUpRightIcon as ArrowUpRight,
+  CheckIcon as Check,
+  ClockIcon as Clock3,
+  PenNibIcon as Feather,
+  NotePencilIcon as FilePenLine,
+  HardDriveIcon as HardDrive,
+  StackIcon as Layers,
+  EnvelopeSimpleIcon as Mail,
+  PencilSimpleIcon as Pencil,
+  PlusIcon as Plus,
+  GearSixIcon as Settings,
+  UsersThreeIcon as UsersRound,
+  UploadSimpleIcon as Upload,
+  SlackLogoIcon,
+  WarningCircleIcon as AlertCircle,
+  CaretRightIcon as ChevronRight,
+} from "@phosphor-icons/react";
 import type { AppId, Draft, Page, Persona, Workspace } from "./types";
 import {
   allowedRoles,
@@ -156,10 +155,22 @@ function Dashboard({ initial }: { initial: Workspace }) {
     state.drafts.filter((d) => id === "all" || d.appId === id).length;
   return (
     <div className="app">
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
+        Skip to workspace
+      </a>
       <header className="top">
         <div className="row">
           <span className="brand">
-            <Feather size={22} />
+            <span className="brand-mark" aria-hidden="true">
+              m<span />
+            </span>
             margin
           </span>
           <span className="rule" />
@@ -169,7 +180,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
           <span className="workspace-mode">
             {state.mode === "demo" ? "Sample workspace" : "Local workspace"}
           </span>
-          <button onClick={() => setPage("settings")}>
+          <button className="top-settings" onClick={() => setPage("settings")}>
             <Settings size={16} />
             Settings
           </button>
@@ -214,7 +225,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   {c.id === "all" ? (
                     <Layers size={18} />
                   ) : c.id === "slack" ? (
-                    <Hash size={19} />
+                    <SlackLogoIcon size={20} />
                   ) : c.id === "gmail" ? (
                     <Mail size={18} />
                   ) : (
@@ -228,7 +239,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       ? "All your drafts"
                       : c.connected
                         ? state.mode === "demo"
-                          ? "Sample connection"
+                          ? "Sample"
                           : "Connected"
                         : "Not connected"}
                   </small>
@@ -246,14 +257,6 @@ function Dashboard({ initial }: { initial: Workspace }) {
               <UsersRound size={17} />
               Edit your roles
             </button>
-            <button
-              className="side-action"
-              aria-pressed={page === "settings"}
-              onClick={() => setPage("settings")}
-            >
-              <Settings size={17} />
-              Settings
-            </button>
             <p className="sub">
               {saved ? (
                 <>
@@ -266,17 +269,23 @@ function Dashboard({ initial }: { initial: Workspace }) {
             </p>
           </div>
         </aside>
-        <main className="workspace">
+        <main
+          className={`workspace workspace-${page}`}
+          id="main-content"
+          tabIndex={-1}
+        >
           {page === "drafts" && (
             <>
               <section className="page-head">
                 <div className="row between">
                   <div>
-                    <p className="overline">Your drafts</p>
+                    <p className="overline">Drafts</p>
                     <h1>{app === "all" ? "All apps" : APP_NAMES[app]}</h1>
                   </div>
-                  <span className="badge">
-                    <Sparkles size={14} />
+                  <span className="automation-status">
+                    <span
+                      className={`status-dot${state.preferences.automaticDrafts ? " on" : ""}`}
+                    />
                     {state.preferences.automaticDrafts
                       ? "Automatic drafts on"
                       : "Manual drafting"}
@@ -284,8 +293,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 </div>
                 <p className="description">
                   {app === "all"
-                    ? "Your drafts, with the right voice for every conversation."
-                    : `Your ${APP_NAMES[app]} conversations, with the right voice for each reply.`}
+                    ? "A reply for every part of your life."
+                    : `Review your replies, then pick up the conversation in ${APP_NAMES[app]}.`}
                 </p>
                 <div className="role-chips">
                   <span className="sub">
@@ -294,7 +303,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       : "Allowed Roles:"}
                   </span>
                   {allowedRoles(state.roles, app).map((r) => (
-                    <span key={r.id} className="chip">
+                    <span key={r.id} className="role-label">
                       {r.name}
                     </span>
                   ))}
@@ -426,26 +435,28 @@ function Dashboard({ initial }: { initial: Workspace }) {
                         . Resolve them in the original app before sending.
                       </p>
                     )}
-                    <div className="row between">
-                      <span className="badge">
-                        <UsersRound size={14} />
-                        {activeRole.name} role
-                      </span>
-                      <button
-                        className="primary"
-                        onClick={() => void investigate(activeDraft)}
-                      >
-                        Open in {APP_NAMES[activeDraft.appId]}
-                        <ArrowUpRight size={16} />
-                      </button>
-                    </div>
-                    <p className="link-note">
-                      {activeDraft.localChanges
-                        ? "This edit is saved locally. Live app sync is not connected yet."
-                        : activeDraft.externalUrl
-                          ? "Review, edit and send in the original app."
-                          : `No specific draft link supplied. Opens ${APP_NAMES[activeDraft.appId] === "Gmail" ? "Gmail’s Drafts folder" : APP_NAMES[activeDraft.appId]}.`}
-                    </p>
+                    <footer className="draft-footer">
+                      <div className="row between">
+                        <span className="voice-label">
+                          <UsersRound size={14} />
+                          {activeRole.name} voice
+                        </span>
+                        <button
+                          className="primary"
+                          onClick={() => void investigate(activeDraft)}
+                        >
+                          Open in {APP_NAMES[activeDraft.appId]}
+                          <ArrowUpRight size={16} />
+                        </button>
+                      </div>
+                      <p className="link-note">
+                        {activeDraft.localChanges
+                          ? "This edit is saved locally. Live app sync is not connected yet."
+                          : activeDraft.externalUrl
+                            ? "Review, edit and send in the original app."
+                            : `No specific draft link supplied. Opens ${APP_NAMES[activeDraft.appId] === "Gmail" ? "Gmail’s Drafts folder" : APP_NAMES[activeDraft.appId]}.`}
+                      </p>
+                    </footer>
                   </section>
                 </div>
               ) : (

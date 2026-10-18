@@ -1,5 +1,9 @@
 import { useState, type FormEvent } from "react";
-import { Check, Clock3, Globe } from "lucide-react";
+import {
+  CheckIcon as Check,
+  ClockIcon as Clock3,
+  GlobeSimpleIcon as Globe,
+} from "@phosphor-icons/react";
 import type { Draft, TimeChoice } from "../types";
 import { formatTime } from "../lib/domain";
 import Modal from "./Modal";

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { XIcon as X } from "@phosphor-icons/react";
 export default function Modal({
   title,
   onClose,
