@@ -78,7 +78,20 @@ def test_inbox_uses_current_gmail_text_and_preserves_delivery_identity(setup):
 
 
 @pytest.mark.parametrize(
-    "body", ["", "   ", "At [TIME]", "On [DATE]", "[PERSON NAME]", "x" * 60001]
+    "body",
+    [
+        "",
+        "   ",
+        "At [TIME]",
+        "On [DATE]",
+        "[AMOUNT]",
+        "[PHONE]",
+        "[ADDRESS]",
+        "[LINK]",
+        "[MEETING_LINK_2]",
+        "[PERSON NAME]",
+        "x" * 60001,
+    ],
 )
 def test_unresolved_or_invalid_replies_never_send(setup, body):
     store, client, request = setup
@@ -168,9 +181,7 @@ def test_rest_send_never_retries_an_uncertain_write(outcome):
         calls.append((args, kwargs))
         if outcome == "timeout":
             raise requests.Timeout()
-        return SimpleNamespace(
-            status_code=503 if outcome == "server" else 200, ok=True, json=dict
-        )
+        return SimpleNamespace(status_code=503 if outcome == "server" else 200, ok=True, json=dict)
 
     with pytest.raises(PublishUncertain):
         GmailClient(SimpleNamespace(post=post)).send_draft("draft", "thread", "raw")

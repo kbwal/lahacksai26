@@ -49,7 +49,7 @@ export function sampleWorkspace(): Workspace {
         recipient: "Professor Chen",
         address: "professor.chen@university.example",
         context: "What time would work for you to discuss your project?",
-        body: "Hi Professor Chen,\n\nThanks for making time. [TIME] works for me. I’d love to go over your feedback on the project and a couple of questions I had.\n\nBest,\nSudarsan",
+        body: "Hi Professor Chen,\n\nThanks for making time. [DATE] at [TIME] works for me. We can meet here: [LINK]. I’d love to go over your feedback on the project and a couple of questions I had.\n\nBest,\nSudarsan",
         updatedAt: "2026-10-17T16:42:00-07:00",
       },
       {

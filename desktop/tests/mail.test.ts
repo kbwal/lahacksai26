@@ -74,8 +74,10 @@ describe("native send boundary", () => {
     h.workspace.mode = "demo";
     await expect(h.send()).rejects.toThrow("Load your connected");
     h.workspace.mode = "local";
-    h.workspace.drafts[0].body = "At [TIME].";
-    await expect(h.send()).rejects.toThrow("placeholder");
+    for (const token of ["DATE", "TIME", "AMOUNT", "PHONE", "ADDRESS", "LINK", "MEETING_LINK_2"]) {
+      h.workspace.drafts[0].body = `Missing [${token}].`;
+      await expect(h.send()).rejects.toThrow("placeholder");
+    }
     expect(h.dialog.showMessageBox).not.toHaveBeenCalled();
     expect(h.worker).not.toHaveBeenCalled();
   });

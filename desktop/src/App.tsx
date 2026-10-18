@@ -6,7 +6,6 @@ import {
   ArrowClockwiseIcon,
   XIcon,
   CheckIcon as Check,
-  ClockIcon as Clock3,
   PenNibIcon as Feather,
   HardDriveIcon as HardDrive,
   EnvelopeSimpleIcon as Mail,
@@ -24,7 +23,9 @@ import {
   searchDrafts,
   APP_LINKS,
   APP_NAMES,
-  fillTime,
+  fillDetail,
+  draftDetails,
+  draftParts,
   parseWorkspace,
   placeholders,
 } from "./lib/domain";
@@ -32,7 +33,7 @@ import { loadWorkspace, openExternal, saveWorkspace } from "./lib/storage";
 import { sampleWorkspace } from "./lib/sample";
 import RoleEditor from "./components/RoleEditor";
 import AppMark from "./components/AppMark";
-import TimePicker, { TimeToken } from "./components/TimePicker";
+import DetailEditor, { DetailToken } from "./components/DetailEditor";
 function message(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
@@ -84,7 +85,10 @@ function Dashboard({ initial }: { initial: Workspace }) {
   const [app, setApp] = useState<AppId | "all">("gmail"),
     [draftId, setDraftId] = useState("office");
   const [roleEditor, setRoleEditor] = useState<Persona | "new" | null>(null),
-    [timeDraft, setTimeDraft] = useState<Draft | null>(null);
+    [detailEditor, setDetailEditor] = useState<{
+      draft: Draft;
+      key: string;
+    } | null>(null);
   const [error, setError] = useState(""),
     [saved, setSaved] = useState(false),
     [notice, setNotice] = useState("");
@@ -248,6 +252,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
   );
   const drafts = searchDrafts(appDrafts, query, state.roles);
   const activeDraft = drafts.find((d) => d.id === draftId) || drafts[0];
+  const details = activeDraft ? draftDetails(activeDraft) : [];
+  const pendingDetails = details.filter((detail) => !detail.value);
   const connection = state.connections.find((c) => c.id === app);
   const activeRole = state.roles.find((r) => r.id === activeDraft?.roleId);
   function selectApp(id: AppId | "all") {
@@ -488,7 +494,9 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     </div>
                     {drafts.map((d) => {
                       const role = state.roles.find((r) => r.id === d.roleId)!;
-                      const tokens = placeholders(d.body);
+                      const tokens = draftDetails(d).filter(
+                        (detail) => !detail.value,
+                      );
                       return (
                         <button
                           key={d.id}
@@ -562,51 +570,53 @@ function Dashboard({ initial }: { initial: Workspace }) {
                       </p>
                     )}
                     <div className="draft-body">
-                      {(activeDraft.timeEdit?.template ?? activeDraft.body)
-                        .split("[TIME]")
-                        .map((text, i) => (
-                          <span key={i}>
-                            {i > 0 && (
-                              <TimeToken
-                                label={activeDraft.timeEdit?.rendered}
-                                onClick={() => setTimeDraft(activeDraft)}
-                              />
-                            )}
-                            {text}
-                          </span>
-                        ))}
+                      {draftParts(activeDraft).map((part, index) =>
+                        part.detail ? (
+                          <DetailToken
+                            key={index}
+                            token={part.detail.token}
+                            value={part.detail.value}
+                            disabled={!!sendingId || mailBusy}
+                            onClick={() =>
+                              setDetailEditor({
+                                draft: activeDraft,
+                                key: part.detail!.key,
+                              })
+                            }
+                          />
+                        ) : (
+                          <span key={index}>{part.text}</span>
+                        ),
+                      )}
                     </div>
-                    {(activeDraft.body.includes("[TIME]") ||
-                      activeDraft.timeEdit) && (
+                    {details.length > 0 && (
                       <div className="time-prompt">
                         <div>
                           <h3>
-                            {activeDraft.timeEdit
-                              ? "Time inserted"
-                              : "One detail to fill"}
+                            {pendingDetails.length
+                              ? `${pendingDetails.length} ${pendingDetails.length === 1 ? "detail" : "details"} to fill`
+                              : "Details filled"}
                           </h3>
                           <p className="sub">
-                            {activeDraft.timeEdit
-                              ? "You can change this time before opening the original app."
-                              : "Choose the time you want in your reply."}
+                            {pendingDetails.length
+                              ? "Click each highlighted detail to fill it before sending."
+                              : "Click an inserted detail to change it."}
                           </p>
                         </div>
-                        <button onClick={() => setTimeDraft(activeDraft)}>
-                          <Clock3 size={16} />
-                          {activeDraft.timeEdit ? "Change time" : "Insert time"}
-                        </button>
+                        {pendingDetails.length > 0 && (
+                          <button
+                            disabled={!!sendingId || mailBusy}
+                            onClick={() =>
+                              setDetailEditor({
+                                draft: activeDraft,
+                                key: pendingDetails[0].key,
+                              })
+                            }
+                          >
+                            Fill next detail
+                          </button>
+                        )}
                       </div>
-                    )}
-                    {placeholders(activeDraft.body).filter(
-                      (p) => p !== "[TIME]",
-                    ).length > 0 && (
-                      <p className="warning spaced">
-                        Other details to fill:{" "}
-                        {placeholders(activeDraft.body)
-                          .filter((p) => p !== "[TIME]")
-                          .join(", ")}
-                        . Resolve them in the original app before sending.
-                      </p>
                     )}
                     <footer className="draft-footer">
                       <div className="row between">
@@ -915,26 +925,31 @@ function Dashboard({ initial }: { initial: Workspace }) {
           onSave={saveRole}
         />
       )}
-      {timeDraft && (
-        <TimePicker
-          draft={timeDraft}
-          onClose={() => setTimeDraft(null)}
-          onInsert={(choice) => {
-            try {
-              const updated = fillTime(timeDraft, choice);
-              setState((s) => ({
-                ...s,
-                drafts: s.drafts.map((d) =>
-                  d.id === updated.id ? updated : d,
-                ),
-              }));
-              setTimeDraft(null);
-              setNotice(
-                "Time inserted and saved locally. Sync to the original app is not connected yet.",
+      {detailEditor && (
+        <DetailEditor
+          key={`${detailEditor.draft.id}:${detailEditor.key}`}
+          draft={detailEditor.draft}
+          detailKey={detailEditor.key}
+          onClose={() => setDetailEditor(null)}
+          onSave={(value, input) => {
+            const current = state.drafts.find(
+              (draft) => draft.id === detailEditor.draft.id,
+            );
+            if (!current || current.body !== detailEditor.draft.body)
+              throw new Error(
+                "The draft changed while you were editing. Open the detail again.",
               );
-            } catch (e) {
-              setError(message(e));
-            }
+            const updated = fillDetail(current, detailEditor.key, value, input);
+            setState((s) => ({
+              ...s,
+              drafts: s.drafts.map((draft) =>
+                draft.id === updated.id ? updated : draft,
+              ),
+            }));
+            setDetailEditor(null);
+            setNotice(
+              "Detail saved on this device. Sending from Margin includes your changes.",
+            );
           }}
         />
       )}

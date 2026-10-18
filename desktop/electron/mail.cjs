@@ -176,7 +176,7 @@ function registerMail({
         !workspace.connections.some((c) => c.id === "gmail" && c.connected)
       )
         throw new Error("Load your connected Gmail drafts before sending.");
-      if (!draft.body?.trim() || /\[[A-Z][A-Z_ ']*\]/.test(draft.body))
+      if (!draft.body?.trim() || /\[[A-Z][A-Z0-9_ '-]*\]/.test(draft.body))
         throw new Error("Fill every placeholder before sending.");
       const reviewed = JSON.stringify(draft);
       const answer = await dialog.showMessageBox(getWindow(), {

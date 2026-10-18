@@ -12,7 +12,7 @@ from urllib.parse import quote
 from gmail_agent.client import GmailError, PublishUncertain
 from gmail_agent.store import now_ms
 
-TOKEN = re.compile(r"\[[A-Z][A-Z_ ']*\]")
+TOKEN = re.compile(r"\[[A-Z][A-Z0-9_ '-]*\]")
 
 
 def snapshot(message):

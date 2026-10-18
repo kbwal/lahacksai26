@@ -31,7 +31,7 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 - New roles allow every app. Existing roles can opt out of individual apps.
 - Existing drafts remain visible after a role excludes their app.
 - Draft previews display the role, incoming context, text and unresolved placeholders.
-- `[TIME]` opens an accessible date/time dialog with quick choices and a sentence preview. It replaces all time placeholders in that local draft, preserving other placeholders. Filled times remain clickable and can be corrected after reopening the app.
+- Model placeholders open an accessible detail editor with a preview in the actual reply. `[DATE]`, `[TIME]`, `[AMOUNT]`, `[PHONE]`, `[ADDRESS]`, and `[LINK]` follow the types in the train branch’s `train/mask.py`; custom uppercase placeholders get a text editor. Each occurrence is filled independently, stays editable after reopening, and blocks sending until resolved. Existing literal details are preserved.
 - Settings persist automatic drafting. The older edit-learning field remains in snapshot version 1 for compatibility; its control has been removed.
 - Roles, preferences and local draft changes persist across restarts. Native files are saved atomically, with the previous file retained as `workspace.json.bak`.
 - Draft buttons open supplied official app URLs, or the app's drafts/home page when no exact link exists.
@@ -76,9 +76,9 @@ Electron saves to its `app.getPath('userData')/workspace.json` (normally `~/Libr
 
 The native shell uses context isolation, renderer sandboxing, disabled Node integration, fixed IPC methods, main-frame sender checks, a restrictive CSP, denied permissions and an external URL allowlist. External content never loads inside the privileged app window.
 
-### Optional local time-edit metadata
+### Optional local detail-edit metadata
 
-`Draft.timeEdit` keeps `{ template, choice: { date, time }, rendered }` so a locally inserted time can be changed without replacing unrelated times in the message. Snapshot validation checks it against `body`. If an integration changes the body, it must remove or regenerate this metadata. Older snapshots without it remain supported.
+`Draft.placeholderEdits` keeps `{ template, values }`, where values use zero-based placeholder occurrence keys and store `{ value, input? }`. Raw date/time input supports reopening the picker. Snapshot validation checks the rendered template against `body`. If an integration changes the body, it must remove or regenerate this metadata. Older snapshots, including legacy `Draft.timeEdit` records, remain supported and migrate when a detail is edited.
 
 Role forms reject blank names/descriptions and duplicate names (ignoring case and surrounding spaces). Modal dialogs focus the relevant input when opened.
 

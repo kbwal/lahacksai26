@@ -1,4 +1,11 @@
-import type { AppId, Draft, Persona, TimeChoice, Workspace } from "../types";
+import type {
+  AppId,
+  Draft,
+  Persona,
+  TimeChoice,
+  Workspace,
+  PlaceholderEdits,
+} from "../types";
 export const APP_IDS: AppId[] = ["gmail", "slack", "outlook"];
 export const APP_NAMES = { gmail: "Gmail", slack: "Slack", outlook: "Outlook" };
 export const APP_LINKS = {
@@ -28,7 +35,7 @@ export function isAllowedExternalUrl(value: string): boolean {
   }
 }
 export function placeholders(text: string): string[] {
-  return [...new Set(text.match(/\[[A-Z][A-Z_ ']*\]/g) || [])];
+  return [...new Set(text.match(/\[[A-Z][A-Z0-9_ '-]*\]/g) || [])];
 }
 export function searchDrafts(
   drafts: Draft[],
@@ -97,6 +104,125 @@ export function fillTime(draft: Draft, choice: TimeChoice): Draft {
     timeEdit: { template, choice: { ...choice }, rendered },
     localChanges: true,
   };
+}
+export interface DraftDetail {
+  key: string;
+  token: string;
+  value?: string;
+  input?: string;
+}
+const tokenPattern = () => /\[[A-Z][A-Z0-9_ '-]*\]/g;
+export function detailEdits(draft: Draft): PlaceholderEdits {
+  if (draft.placeholderEdits) return draft.placeholderEdits;
+  let template = draft.timeEdit?.template ?? draft.body;
+  const values: PlaceholderEdits["values"] = {};
+  if (draft.timeEdit) {
+    const legacy = draft.timeEdit;
+    const clock = formatTime({ date: "", time: legacy.choice.time });
+    const dateText = legacy.choice.date
+      ? legacy.rendered.slice(0, -(clock.length + 4))
+      : "";
+    let index = 0;
+    template = template.replace(tokenPattern(), (token) => {
+      if (token !== "[TIME]") { index++; return token; }
+      if (dateText) {
+        values[String(index++)] = { value: dateText, input: legacy.choice.date };
+      }
+      values[String(index++)] = { value: clock, input: legacy.choice.time };
+      return dateText ? "[DATE] at [TIME]" : "[TIME]";
+    });
+  }
+  return { template, values };
+}
+export function renderDetails(edits: PlaceholderEdits): string {
+  let index = 0;
+  return edits.template.replace(
+    tokenPattern(),
+    (token) => edits.values[String(index++)]?.value ?? token,
+  );
+}
+export function draftDetails(draft: Draft): DraftDetail[] {
+  const edits = detailEdits(draft);
+  return Array.from(
+    edits.template.matchAll(tokenPattern()),
+    (match, index) => ({
+      key: String(index),
+      token: match[0],
+      ...edits.values[String(index)],
+    }),
+  );
+}
+export function draftParts(
+  draft: Draft,
+): { text: string; detail?: DraftDetail }[] {
+  const edits = detailEdits(draft),
+    details = draftDetails(draft);
+  const parts: { text: string; detail?: DraftDetail }[] = [];
+  let end = 0,
+    index = 0;
+  for (const match of edits.template.matchAll(tokenPattern())) {
+    parts.push({ text: edits.template.slice(end, match.index) });
+    const detail = details[index++];
+    parts.push({ text: detail.value ?? detail.token, detail });
+    end = match.index! + match[0].length;
+  }
+  parts.push({ text: edits.template.slice(end) });
+  return parts;
+}
+export function detailValueError(token: string, value: string): string {
+  if (!value.trim()) return "Enter a value before inserting it.";
+  if (value.length > 4000) return "Keep this detail under 4,000 characters.";
+  if (placeholders(value).length)
+    return "Enter the actual detail, without placeholders.";
+  if (token === "[LINK]") {
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return "";
+    try {
+      if (/\s/.test(value)) throw new Error();
+      const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(value);
+      const url = new URL(hasScheme ? value : `https://${value}`);
+      if (
+        !["http:", "https:"].includes(url.protocol) ||
+        !url.hostname ||
+        (!hasScheme && !url.hostname.includes(".")) ||
+        url.username ||
+        url.password
+      )
+        throw new Error();
+    } catch {
+      return "Enter a website, meeting link, or email address.";
+    }
+  }
+  return "";
+}
+export function fillDetail(
+  draft: Draft,
+  key: string,
+  value: string,
+  input?: string,
+): Draft {
+  const edits = detailEdits(draft),
+    detail = draftDetails(draft).find((item) => item.key === key);
+  if (!detail) throw new Error("This detail is no longer in the draft.");
+  if (renderDetails(edits) !== draft.body)
+    throw new Error(
+      "This draft changed. Refresh it before editing its details.",
+    );
+  const error = detailValueError(detail.token, value.trim());
+  if (error) throw new Error(error);
+  const placeholderEdits = {
+    template: edits.template,
+    values: {
+      ...edits.values,
+      [key]: { value: value.trim(), ...(input === undefined ? {} : { input }) },
+    },
+  };
+  if (Object.keys(placeholderEdits.values).length > 1000)
+    throw new Error("Too many filled details.");
+  const body = renderDetails(placeholderEdits);
+  if (body.length > 60000)
+    throw new Error("This detail makes the draft too long.");
+  const { timeEdit: _legacy, ...rest } = draft;
+  return { ...rest, body, placeholderEdits, localChanges: true };
 }
 export function roleFormErrors(
   name: string,
@@ -216,6 +342,36 @@ export function parseWorkspace(input: unknown): Workspace {
       )
         throw new Error("Invalid inserted time metadata.");
     }
+    let placeholderEdits: Draft["placeholderEdits"];
+    if (d.placeholderEdits !== undefined) {
+      if (timeEdit) throw new Error("Conflicting placeholder metadata.");
+      const saved = object(d.placeholderEdits),
+        values = object(saved.values);
+      const template = str(saved.template, "detail template", 60000);
+      const tokens = Array.from(
+        template.matchAll(tokenPattern()),
+        (match) => match[0],
+      );
+      if (Object.keys(values).length > 1000)
+        throw new Error("Too many filled details.");
+      placeholderEdits = { template, values: {} };
+      for (const [key, raw] of Object.entries(values)) {
+        if (!/^(0|[1-9]\d*)$/.test(key) || !tokens[Number(key)])
+          throw new Error("Invalid detail index.");
+        const fill = object(raw),
+          value = str(fill.value, "filled detail", 4000);
+        if (detailValueError(tokens[Number(key)], value))
+          throw new Error("Invalid filled detail.");
+        placeholderEdits.values[key] = {
+          value,
+          ...(fill.input === undefined
+            ? {}
+            : { input: str(fill.input, "detail input", 4000) }),
+        };
+      }
+      if (renderDetails(placeholderEdits) !== body)
+        throw new Error("Invalid filled detail metadata.");
+    }
     let delivery: Draft["delivery"];
     if (d.delivery !== undefined) {
       const source = object(d.delivery);
@@ -246,6 +402,7 @@ export function parseWorkspace(input: unknown): Workspace {
       context: str(d.context, "context", 10000),
       body,
       timeEdit,
+      placeholderEdits,
       updatedAt: str(d.updatedAt, "timestamp", 100),
       externalUrl,
       localChanges: d.localChanges === undefined ? false : bool(d.localChanges),

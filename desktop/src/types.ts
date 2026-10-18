@@ -14,6 +14,14 @@ export interface Persona {
   usableExamples: number;
   trainingReady: boolean;
 }
+export interface DetailFill {
+  value: string;
+  input?: string;
+}
+export interface PlaceholderEdits {
+  template: string;
+  values: Record<string, DetailFill>;
+}
 export interface Draft {
   id: string;
   appId: AppId;
@@ -32,6 +40,7 @@ export interface Draft {
   };
   externalUrl?: string;
   localChanges?: boolean;
+  placeholderEdits?: PlaceholderEdits;
   timeEdit?: { template: string; choice: TimeChoice; rendered: string };
 }
 export interface Workspace {
@@ -54,9 +63,7 @@ declare global {
       gmailInbox(
         account?: string,
       ): Promise<{ accountId: string; drafts: Draft[] }>;
-      sendDraft(
-        id: string,
-      ): Promise<{
+      sendDraft(id: string): Promise<{
         status: "sent" | "cancelled" | "uncertain";
         message?: string;
       }>;

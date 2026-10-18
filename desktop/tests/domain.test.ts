@@ -171,3 +171,108 @@ describe("inbox search", () => {
     expect(() => parseWorkspace(w)).toThrow("delivery metadata");
   });
 });
+
+describe("model-marked details", () => {
+  it("fills every mask.py type, preserves known facts, and remains editable after reopening", async () => {
+    const { fillDetail, draftDetails } = await import("../src/lib/domain");
+    const w = sampleWorkspace();
+    w.drafts[0].body =
+      "Known: https://example.com. [DATE] [TIME] [LINK] [AMOUNT] [PHONE] [ADDRESS] [MEETING_LINK_2]";
+    const values = [
+      "October 20, 2026",
+      "2:00 PM",
+      "https://meet.google.com/abc-defg-hij",
+      "$125",
+      "+1 310 555 0148",
+      "123 Main Street",
+      "Lobby entrance",
+    ];
+    values.forEach((value, index) => {
+      w.drafts[0] = fillDetail(w.drafts[0], String(index), value);
+    });
+    expect(placeholders(w.drafts[0].body)).toEqual([]);
+    expect(w.drafts[0].body).toContain("Known: https://example.com.");
+    const reopened = parseWorkspace(JSON.parse(JSON.stringify(w)));
+    expect(draftDetails(reopened.drafts[0])).toHaveLength(7);
+    const edited = fillDetail(
+      reopened.drafts[0],
+      "2",
+      "https://zoom.us/j/123456789",
+    );
+    expect(edited.body).toContain("https://zoom.us/j/123456789");
+    expect(edited.body).not.toContain("meet.google.com");
+    expect(edited.body).toContain("October 20, 2026 2:00 PM");
+  });
+  it("treats repeated placeholders as separate decisions", async () => {
+    const { fillDetail, draftDetails } = await import("../src/lib/domain");
+    const original = {
+      ...sampleWorkspace().drafts[0],
+      body: "Meet: [LINK]. Notes: [LINK].",
+    };
+    const first = fillDetail(
+      original,
+      "0",
+      "https://meet.google.com/abc-defg-hij",
+    );
+    expect(first.body).toBe(
+      "Meet: https://meet.google.com/abc-defg-hij. Notes: [LINK].",
+    );
+    expect(draftDetails(first).filter((detail) => !detail.value)).toHaveLength(
+      1,
+    );
+    const second = fillDetail(
+      first,
+      "1",
+      "https://docs.google.com/document/d/notes",
+    );
+    expect(second.body).toContain(
+      "Meet: https://meet.google.com/abc-defg-hij.",
+    );
+    expect(second.body).toContain(
+      "Notes: https://docs.google.com/document/d/notes.",
+    );
+    expect(original.body).toBe("Meet: [LINK]. Notes: [LINK].");
+  });
+  it("migrates existing inserted times without losing their values", async () => {
+    const { fillDetail, draftDetails } = await import("../src/lib/domain");
+    const original = {
+      ...sampleWorkspace().drafts[0],
+      body: "At [TIME], join [LINK]. Old meeting: 9:00 AM.",
+    };
+    const timed = fillTime(original, { date: "2026-10-20", time: "09:00" });
+    const linked = fillDetail(
+      timed,
+      "2",
+      "https://meet.google.com/abc-defg-hij",
+    );
+    expect(linked.timeEdit).toBeUndefined();
+    expect(draftDetails(linked)[0].value).toContain(
+      "Tuesday, Oct 20",
+    );
+    const w = sampleWorkspace();
+    w.drafts[0] = linked;
+    const reopened = parseWorkspace(JSON.parse(JSON.stringify(w))).drafts[0];
+    expect(fillDetail(reopened, "1", "4:30 PM", "16:30").body).toBe(
+      "At Tuesday, Oct 20 at 4:30 PM, join https://meet.google.com/abc-defg-hij. Old meeting: 9:00 AM.",
+    );
+  });
+  it("rejects stale or forged edits and unfinished replacements", async () => {
+    const { fillDetail } = await import("../src/lib/domain");
+    const original = { ...sampleWorkspace().drafts[0], body: "Join [LINK]." };
+    for (const invalid of [
+      "javascript:alert(1)",
+      "file:///tmp/private",
+      "not a link",
+      "[MEETING_LINK_2]",
+    ])
+      expect(() => fillDetail(original, "0", invalid)).toThrow();
+    const filled = fillDetail(original, "0", "person@example.com");
+    expect(() =>
+      fillDetail({ ...filled, body: "Changed elsewhere" }, "0", "example.org"),
+    ).toThrow("changed");
+    const w = sampleWorkspace();
+    w.drafts[0] = filled;
+    w.drafts[0].placeholderEdits!.values["4"] = { value: "bad" };
+    expect(() => parseWorkspace(w)).toThrow("detail index");
+  });
+});

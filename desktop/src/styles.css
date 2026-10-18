@@ -1055,3 +1055,27 @@ input[type="checkbox"] {
     flex-basis: 100%;
   }
 }
+
+.detail-token {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.detail-token-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.detail-preview p {
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow: auto;
+}
+.detail-preview strong {
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
