@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
-import { ArrowClockwiseIcon, FolderOpenIcon } from "@phosphor-icons/react";
+import { ArrowClockwiseIcon, CaretRightIcon, FolderOpenIcon } from "@phosphor-icons/react";
 import type { ChatConnection, ChatInbox, ChatSource } from "../types";
 import { APP_NAMES } from "../lib/domain";
 import { chatKey, chatStatus } from "../lib/chat";
 import AppMark from "./AppMark";
 
-export default function ChatInboxControls({source, selection, onSelect, onLoaded}: {
+export default function ChatInboxControls({source, selection, onSelect, onLoaded, compact = false}: {
   source: ChatSource;
+  compact?: boolean;
   selection: string;
   onSelect: (selection: string) => void;
   onLoaded: (inbox: ChatInbox) => void;
@@ -55,7 +56,7 @@ export default function ChatInboxControls({source, selection, onSelect, onLoaded
     } catch (e) { setError(e instanceof Error ? e.message : "Could not load suggestions."); }
     finally { setBusy(""); }
   }
-  return <section className="chat-connection" aria-label={`${name} connection`} aria-busy={!!busy}>
+  const controls = <>
     <div className="row"><AppMark app={source} /><h2>{name} inbox</h2></div>
     <p className="sub">Load replies from your saved connection. Review and copy them, then send in {name}.</p>
     {!window.margin ? <p className="sub spaced">Open the Mac app to load your {name} connection. Sample drafts are available here.</p> : <>
@@ -80,5 +81,11 @@ export default function ChatInboxControls({source, selection, onSelect, onLoaded
       {!busy && current && <p className="sub spaced" role="status">{chatStatus(current)}</p>}
       {error && <p className="warning spaced" role="alert">{error}</p>}
     </>}
+  </>;
+  return <section className="chat-connection" aria-label={`${name} connection`} aria-busy={!!busy}>
+    {compact ? <details className="connection-disclosure">
+      <summary><span className="row"><CaretRightIcon size={14} className="disclosure-caret" />Connection and sync</span> <span className={error ? "warning" : "sub"}>{error ? "Needs attention" : busy || (!window.margin ? "Mac app required" : current ? "Connection selected" : "Choose a connection")}</span></summary>
+      <div className="connection-options">{controls}</div>
+    </details> : controls}
   </section>;
 }

@@ -136,7 +136,7 @@ export default function RoleEditor({
               All apps included
             </span>
             <p className="sub spaced">
-              Gmail, Slack, Outlook and future apps. You can add exceptions
+              Gmail, Slack, Discord, Outlook and future apps. You can add exceptions
               later. Training waits until there are enough usable examples.
             </p>
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   ArrowUpRightIcon as ArrowUpRight,
+  ArrowLeftIcon,
   MagnifyingGlassIcon,
   PaperPlaneTiltIcon,
   ArrowClockwiseIcon,
@@ -98,6 +99,9 @@ function Dashboard({ initial }: { initial: Workspace }) {
     [saved, setSaved] = useState(false),
     [notice, setNotice] = useState("");
   const [composing, setComposing] = useState(false);
+  const [mobilePreview, setMobilePreview] = useState(false);
+  const draftPreview = useRef<HTMLElement>(null);
+  const draftList = useRef<HTMLElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const [chatSelections, setChatSelections] = useState<Record<ChatSource, string>>(() => {
@@ -115,8 +119,8 @@ function Dashboard({ initial }: { initial: Workspace }) {
     setQuery("");
     setNotice(`Loaded ${result.drafts.length} ${APP_NAMES[result.source]} ${result.drafts.length === 1 ? "suggestion" : "suggestions"}. Local edits are preserved.`);
   }
-  function chatControls(source: ChatSource) {
-    return <ChatInboxControls key={source} source={source} selection={chatSelections[source]}
+  function chatControls(source: ChatSource, compact = false) {
+    return <ChatInboxControls key={source} source={source} compact={compact} selection={chatSelections[source]}
       onSelect={selection => setChatSelections(values => ({...values, [source]: selection}))}
       onLoaded={loadChatInbox} />;
   }
@@ -289,6 +293,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
   const activeRole = state.roles.find((r) => r.id === activeDraft?.roleId);
   function selectApp(id: AppId | "all") {
     setApp(id);
+    setMobilePreview(false);
     setDraftId("");
     setPage("drafts");
     setNotice("");
@@ -353,8 +358,6 @@ function Dashboard({ initial }: { initial: Workspace }) {
             </span>
             margin
           </span>
-          <span className="rule" />
-          <span className="tagline">Your writing, in every context.</span>
         </div>
         <div className="row">
           <span className="workspace-mode">
@@ -362,7 +365,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
           </span>
           <span className="local-status">
             <HardDrive size={15} />
-            On your Mac
+            Stored locally
           </span>
         </div>
       </header>
@@ -383,7 +386,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
       )}
       <div className="layout">
         <aside className="sidebar">
-          <span className="overline side-heading">Your apps</span>
+          <span className="side-heading">Inboxes</span>
           <nav aria-label="Filter drafts by app">
             {(
               [
@@ -394,6 +397,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
               <button
                 key={c.id}
                 className="nav-app"
+                title={c.name}
                 aria-pressed={page === "drafts" && app === c.id}
                 onClick={() => selectApp(c.id)}
               >
@@ -402,7 +406,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   <strong>{c.name}</strong>
                   <small>
                     {c.id === "all"
-                      ? "All your drafts"
+                      ? ""
                       : c.connected
                         ? state.mode === "demo"
                           ? "Sample"
@@ -417,21 +421,25 @@ function Dashboard({ initial }: { initial: Workspace }) {
           <div className="sidebar-bottom">
             <button
               className="side-action"
+              title="Settings"
+              aria-label="Settings"
               aria-pressed={page === "settings"}
               onClick={() => setPage("settings")}
             >
               <Settings size={17} />
-              Settings
+              <span>Settings</span>
             </button>
             <button
               className="side-action"
+              title="Personas"
+              aria-label="Personas"
               aria-pressed={page === "roles"}
               onClick={() => setPage("roles")}
             >
               <UsersRound size={17} />
-              Edit your personas
+              <span>Personas</span>
             </button>
-            <p className="sub">
+            <p className="sub save-status" role="status">
               {saved ? (
                 <>
                   <Check size={13} />
@@ -452,48 +460,21 @@ function Dashboard({ initial }: { initial: Workspace }) {
             <>
               <section className="page-head">
                 <div className="row between">
-                  <div>
-                    <p className="overline">Drafts</p>
-                    <h1>{app === "all" ? "All apps" : APP_NAMES[app]}</h1>
+                  <div className="inbox-title">
+                    <h1>{app === "all" ? "All drafts" : APP_NAMES[app]}</h1>
+                    <span className="draft-total">{appDrafts.length} {appDrafts.length === 1 ? "draft" : "drafts"}</span>
                   </div>
-                  <div className="row">
-                    <button className="primary" onClick={() => setComposing(true)} disabled={!!sendingId || mailBusy}>
-                      <Pencil size={16} /> Draft a message
-                    </button>
-                  <span className="automation-status">
-                    <span
-                      className="status-dot on"
-                    />
-                    {app === "slack" || app === "discord" ? "Local suggestions" : "Automatic drafts on"}
-                  </span>
-                  </div>
-                </div>
-                <p className="description">
-                  {app === "all"
-                    ? "A message for every part of your life."
-                    : `Review your drafts, then pick up the conversation in ${APP_NAMES[app]}.`}
-                </p>
-                <div className="role-chips">
-                  <span className="sub">
-                    {app === "all"
-                      ? "Personas across your apps:"
-                      : "Allowed Personas:"}
-                  </span>
-                  {allowedRoles(state.roles, app).map((r) => (
-                    <span key={r.id} className="role-label">
-                      {r.name}
-                    </span>
-                  ))}
-                  {!allowedRoles(state.roles, app).length && (
-                    <span className="sub">None allowed</span>
-                  )}
-                  <button className="ghost" onClick={() => setPage("roles")}>
-                    <Pencil size={14} />
-                    Edit your personas
+                  <button className="primary" onClick={() => setComposing(true)} disabled={!!sendingId || mailBusy}>
+                    <Pencil size={16} /> New message
                   </button>
                 </div>
+                <button className="persona-summary ghost" onClick={() => setPage("roles")}>
+                  <UsersRound size={15} />
+                  <span>{allowedRoles(state.roles, app).map(r => r.name).join(", ") || "No personas allowed"}</span>
+                  <ChevronRight size={13} />
+                </button>
               </section>
-              {(app === "slack" || app === "discord") && chatControls(app)}
+              {(app === "slack" || app === "discord") && chatControls(app, true)}
               <div className="inbox-toolbar">
                 <div className="inbox-search">
                   <MagnifyingGlassIcon size={17} aria-hidden="true" />
@@ -502,7 +483,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     aria-label="Search inbox"
                     placeholder="Search people, messages, personas…"
                     value={query}
-                    onChange={(e) => setQuery(e.target.value)}
+                    onChange={(e) => { setQuery(e.target.value); setMobilePreview(false); }}
                   />
                   {query && (
                     <button
@@ -525,10 +506,10 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 )}
               </div>
               {activeDraft && activeRole ? (
-                <div className="draft-layout">
-                  <section className="draft-list" aria-label="Current drafts">
+                <div className={`draft-layout${mobilePreview ? " show-preview" : ""}`}>
+                  <section ref={draftList} tabIndex={-1} className="draft-list" aria-label="Current drafts">
                     <div className="row between list-heading">
-                      <h2>Current drafts</h2>
+                      <h2>{query.trim() ? "Search results" : "Ready for review"}</h2>
                       <span className="sub">{drafts.length}</span>
                     </div>
                     {drafts.map((d) => {
@@ -542,7 +523,12 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           className="draft-item"
                           data-app={d.appId}
                           aria-pressed={activeDraft.id === d.id}
-                          onClick={() => setDraftId(d.id)}
+                          onClick={() => {
+                            setDraftId(d.id); setMobilePreview(true);
+                            if (window.matchMedia("(max-width: 700px)").matches) {
+                              requestAnimationFrame(() => draftPreview.current?.focus());
+                            }
+                          }}
                         >
                           <div className="row between">
                             <span className="draft-meta">
@@ -552,7 +538,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                                   {APP_NAMES[d.appId]}
                                 </span>
                               )}
-                              <span className="draft-role">{role.name}</span>
+                              <strong className="draft-recipient">{d.recipient}</strong>
                             </span>
                             <span className="sub">
                               {new Date(d.updatedAt).toLocaleDateString(
@@ -561,25 +547,31 @@ function Dashboard({ initial }: { initial: Workspace }) {
                               )}
                             </span>
                           </div>
-                          <strong>{d.subject}</strong>
-                          <span className="sub">To {d.recipient}</span>
+                          <span className="draft-subject">{d.subject}</span>
                           <p className="excerpt">
                             {d.body.replaceAll("\n", " ")}
                           </p>
+                          <div className="row between draft-item-status">
+                          <span className="draft-role">{role.name}</span>
                           <span className={tokens.length ? "warning" : "sub"}>
                             {tokens.length
                               ? `${tokens.length} ${tokens.length === 1 ? "detail" : "details"} to fill`
                               : d.localChanges
                                 ? "Updated locally"
-                                : "Ready for review"}
+                                : "Ready"}
                           </span>
+                          </div>
                         </button>
                       );
                     })}
                   </section>
-                  <section className="draft-detail" aria-label="Draft preview">
+                  <section ref={draftPreview} tabIndex={-1} className="draft-detail" aria-label="Draft preview">
+                    <button className="back-to-drafts ghost" onClick={() => {
+                      setMobilePreview(false);
+                      requestAnimationFrame(() => draftList.current?.querySelector<HTMLButtonElement>("[aria-pressed=true]")?.focus());
+                    }}><ArrowLeftIcon size={16} /> Back to drafts</button>
                     <div className="row between">
-                      <span className="overline">Draft preview</span>
+                      <span className="overline">{activeDraft.composed ? "New message" : "Reply draft"}</span>
                       <span
                         className="badge draft-source"
                         data-app={activeDraft.appId}
@@ -597,11 +589,13 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     </div>
                     <h2>{activeDraft.subject}</h2>
                     <p className="address">
-                      To {activeDraft.recipient} · {activeDraft.address}
+                      To <strong>{activeDraft.recipient}</strong>
+                      {activeDraft.address && activeDraft.address !== activeDraft.recipient && <span>{activeDraft.address}</span>}
                     </p>
-                    {activeDraft.context && <p className="sub context">
-                      In reply to: “{activeDraft.context}”
-                    </p>}
+                    {activeDraft.context && <details className="context" open>
+                      <summary>Original message</summary>
+                      <p>{activeDraft.context}</p>
+                    </details>}
                     {activeDraft.chat?.stale && <p className="warning spaced">
                       The conversation has changed. Your edits are kept here; open the original thread before using this reply.
                     </p>}
@@ -704,7 +698,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           ? "Your edits are saved locally and included when you copy or send this draft."
                           : activeDraft.externalUrl
                             ? "Review, edit and send in the original app."
-                            : `No specific draft link supplied. Opens ${APP_NAMES[activeDraft.appId] === "Gmail" ? "Gmail’s Drafts folder" : APP_NAMES[activeDraft.appId]}.`}
+                            : `Opens ${APP_NAMES[activeDraft.appId] === "Gmail" ? "Gmail’s Drafts folder" : APP_NAMES[activeDraft.appId]}.`}
                       </p>
                     </footer>
                   </section>
@@ -716,15 +710,15 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     {query.trim()
                       ? "No matching drafts."
                       : connection && !connection.connected
-                        ? `Connect ${connection.name} to see your drafts.`
-                        : "You’re all caught up."}
+                        ? `${connection.name} isn’t connected`
+                        : "No drafts yet"}
                   </h2>
                   <p className="description">
                     {query.trim()
                       ? `No drafts match “${query.trim()}” in ${app === "all" ? "All apps" : APP_NAMES[app]}. Try another person or phrase.`
                       : connection && !connection.connected
-                        ? "All your personas are allowed by default. You can add exceptions in Edit your personas."
-                        : "Drafts for messages likely to need a reply will appear here. Manual drafting stays available in your apps."}
+                        ? "Open Settings to choose an existing connection and load its drafts."
+                        : "Load drafts from a connected account, or start a new message."}
                   </p>
                   {query.trim() ? (
                     <button onClick={() => setQuery("")}>Clear search</button>
@@ -743,14 +737,13 @@ function Dashboard({ initial }: { initial: Workspace }) {
               <section className="page-head">
                 <div className="row between">
                   <div>
-                    <p className="overline">Personalization</p>
-                    <h1>Edit your personas</h1>
+                    <h1>Personas</h1>
                   </div>
                 </div>
                 <p className="description">
-                  Give each part of your life its own voice. Every persona uses all
-                  connected apps by default.
+                  Set the writing style and allowed apps for each persona.
                 </p>
+                <button className="spaced" onClick={() => setRoleEditor("new")}><UsersRound size={16} /> Add persona</button>
               </section>
               <section className="roles-list">
                 {state.roles.map((r) => (
@@ -797,7 +790,6 @@ function Dashboard({ initial }: { initial: Workspace }) {
           {page === "settings" && (
             <>
               <section className="page-head">
-                <p className="overline">Preferences</p>
                 <h1>Settings</h1>
                 <p className="description">
                   Your accounts, drafting preferences and local data.
@@ -941,7 +933,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
         onClose={() => setComposing(false)}
         onSave={(draft) => {
           setState(s => parseWorkspace({...s, drafts: [applyPersonalDetails(draft, s.personalDetails), ...s.drafts]}));
-          setApp(draft.appId); setDraftId(draft.id); setQuery(""); setComposing(false);
+          setApp(draft.appId); setDraftId(draft.id); setQuery(""); setComposing(false); setMobilePreview(true);
           setNotice("New message drafted locally. Review its details, then copy it into your app.");
         }}
       />}
