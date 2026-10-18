@@ -1,3 +1,4 @@
+import importlib
 import runpy
 import sys
 import weakref
@@ -111,6 +112,8 @@ def test_training_commands_obey_shared_lock(tmp_path, monkeypatch, command, isol
         # Stop before training: the integration under test is acquisition/release.
         raise ValueError("stop after checking lock")
 
+    importlib.import_module("train.dpo")  # Load before replacing model dependencies.
+
     core = SimpleNamespace(random=SimpleNamespace(seed=lambda _: None))
     optim = SimpleNamespace()
     monkeypatch.setitem(sys.modules, "mlx", SimpleNamespace(core=core, optimizers=optim))
@@ -118,19 +121,21 @@ def test_training_commands_obey_shared_lock(tmp_path, monkeypatch, command, isol
     monkeypatch.setitem(sys.modules, "mlx.optimizers", optim)
     monkeypatch.setitem(sys.modules, "mlx_lm", SimpleNamespace(load=load, generate=lambda: None))
     monkeypatch.setitem(
-        sys.modules, "mlx_lm.tuner.trainer", SimpleNamespace(TrainingArgs=None, train=None)
+        sys.modules, "mlx_lm.tuner.trainer", SimpleNamespace(TrainingArgs=None, train=None, evaluate=None)
     )
     monkeypatch.setitem(
-        sys.modules, "mlx_lm.tuner.utils", SimpleNamespace(linear_to_lora_layers=None)
+        sys.modules, "mlx_lm.tuner.utils", SimpleNamespace(linear_to_lora_layers=None, load_adapters=None)
     )
     monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(save_config=None))
     # Exercise __main__ as python -m does, replacing only native model libraries.
     monkeypatch.delitem(sys.modules, f"train.{command}", raising=False)
     argv = [command, "--model", "/unused", "--arm", "base"]
     if command == "draft":
-        argv.extend(["--pairs", "/unused"])
+        argv.extend(["--prompt", "Say hello"])
     else:
-        argv.extend(["--train", "/unused", "--adapter-path", "/unused"])
+        data = tmp_path / "conversations.jsonl"
+        data.write_text('{"adapter_name":"social","conversation":[{"from":"me","text":"Hello"}]}\n')
+        argv.extend(["--data", str(data), "--adapter-root", str(tmp_path / "adapters")])
     monkeypatch.setattr(sys, "argv", argv)
     with process_lock(lock), pytest.raises(AlreadyRunning):
         runpy.run_module(f"train.{command}", run_name="__main__")
@@ -144,8 +149,6 @@ def test_training_commands_obey_shared_lock(tmp_path, monkeypatch, command, isol
 
 def test_generation_matches_installed_training_prompt_contract(tmp_path, monkeypatch):
     from gmail_agent.replies import context_for
-    from train import format as training_format
-
     prompts = []
     tokenizer = SimpleNamespace(
         encode=lambda text, **_: list(text.encode()),
@@ -178,13 +181,9 @@ def test_generation_matches_installed_training_prompt_contract(tmp_path, monkeyp
     context = context_for(messages[-1], messages, "me@example.com")
     try:
         assert generator.generate(context) == "A reply"
-        if hasattr(training_format, "Conversation"):
-            assert "Me: Are you free?" in prompts[0]
-            assert "Them: Yes!" in prompts[0]
-            assert prompts[0].endswith("Me:")
-        else:
-            assert "From: me@example.com" in prompts[0]
-            assert prompts[0].endswith("Reply:")
+        assert "Me: Are you free?" in prompts[0]
+        assert "Them: Yes!" in prompts[0]
+        assert prompts[0].endswith("Me:")
     finally:
         sys.modules.pop("train.draft", None)
 

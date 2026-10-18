@@ -4,27 +4,28 @@ Companion to [PROJECT.md](PROJECT.md). Target machine: Apple M2, 16 GB unified m
 
 ## 1. Model
 
-- **Base arm:** `Qwen/Qwen3.5-2B-Base`. **Instruct arm:** `Qwen/Qwen3.5-2B`.
+- **Base arm:** `Qwen/Qwen3-1.7B-Base`. **Instruct arm:** `Qwen/Qwen3-1.7B`.
   - The instruct model was post-trained from the base model, so the only difference between the arms is instruction tuning.
   - They share a tokenizer, so held-out loss can be compared directly between them.
-- **Why 2B:** "Train now" has to finish in ~2 minutes on stage, so we test the same size we ship. The 4B pair is a stretch goal. If Qwen3.5 gives us trouble, the fallback is `Qwen3-1.7B` / `Qwen3-1.7B-Base`.
-- **Precision:** bf16 everywhere (~4.5 GB). If drafting is too slow, move the *whole* pipeline (training and serving) to 8-bit. Never train in one precision and serve in another, and avoid 4-bit at this size.
+- **Why 1.7B:** "Train now" has to finish in ~2 minutes on stage, so we test the same size we ship. Measured on the M2 (LoRA rank 16, last 16 layers, grad checkpointing): ~235 tok/s, and 8 rows × 1024 tokens peaks at 10.5 GB of the 11.45 GB Metal limit. Two minutes is therefore ~28k training tokens. Checkpointing stays on: without it, memory pressure makes steps slower.
+- **Why not Qwen3.5-2B:** 18 of its 24 layers are Gated DeltaNet (linear attention). mlx-lm's kernel for those has no backward pass, so training falls back to a per-token loop that keeps a 1 MB fp32 state per token per layer: ~2 GB per 256-token row, OOM at 4 rows, ~7 tok/s.
+- **Precision:** bf16 everywhere (~3.5 GB). If drafting is too slow, move the *whole* pipeline (training and serving) to 8-bit. Never train in one precision and serve in another, and avoid 4-bit at this size.
 - **Thinking off:** the instruct model is hybrid-thinking, so always render its chat template with `enable_thinking=False`.
 - **Rejected:** Gemma 4 E2B/E4B (larger on disk than they look, and people report trouble with LoRA in MLX), and Llama 3.2 3B (older and weaker).
 
 ## 2. Base vs. instruct experiment
 
 - Both arms get the same data, LoRA config (rank 16, last 16 layers), learning rate, steps and seed. Only the prompt rendering differs (see [train/format.py](train/format.py)):
-  - **Base:** the source-labelled prompt (`Source: … / To: … / Thread: … / Reply:`), then the reply and `<|endoftext|>`.
-  - **Instruct:** the same text as the user turn, plus a one-line system prompt, through the chat template.
-- **Why a custom trainer:** mlx-lm's `completions` format always applies the chat template, which breaks the base arm. mlx-lm also has no DPO. So we build the examples ourselves and reuse its training loop. DPO will be a small custom loss, using the base model with the adapter turned off as the reference.
-- **Split:** by time. The newest ~10% of sent replies are held out.
+  - **Base:** plain text, `Them: …` / `Me: …` turns, each "me" turn ending in `<|endoftext|>`, with an optional `Request: …` line first.
+  - **Instruct:** ChatML with "them" as the user role and "me" as the assistant role. The request goes in the system prompt.
+- **Why a custom trainer:** mlx-lm's `completions` format always applies the chat template, which breaks the base arm. mlx-lm also has no DPO. So we build the examples ourselves and reuse its training loop. DPO is a small custom loss ([train/dpo.py](train/dpo.py)) mixed with SFT in one forward pass. The reference is the starting model: the base model for a from-scratch run, or the live adapter for Train now. Its log-probs are precomputed once, so we never hold two models in memory.
+- **Split:** by time. Held-out records have `"type": "test"` (the default is `"train"`). When an adapter has test records, the trainer logs test loss every `--eval-every` steps (default 50) on `--eval-batches` batches (default 10, the same ones each time), and on the whole test set at the end. Without test records there is no evaluation.
 - **Metrics:**
-  - held-out reply loss
+  - held-out loss on "me" messages
   - placeholder precision/recall
-  - hallucinated specifics (unmasked dates, times or amounts that aren't in the thread)
+  - hallucinated specifics (unmasked dates, times or amounts that aren't in the conversation or request)
   - simple style stats
-  - a blind A/B on ~30 emails by the mailbox owner
+  - a blind A/B on ~30 conversations (replies and requests) by the data owner
 - **Decision:** the A/B result picks the winner. Placeholder correctness and hallucination rate are hard requirements.
 
 ## 3. Architecture
@@ -65,27 +66,31 @@ work. Gmail remains the only native draft integration.
 2. **Filter:** drop messages with `List-Unsubscribe`, `Precedence: bulk|list`, `Auto-Submitted`, or a `noreply` sender.
 3. **Clean:** `email-reply-parser` strips quoted text. Signatures are found by taking the user's most common trailing block of lines and stripping it.
 4. **Relationships:** heuristics give a first guess, then the user labels their top ~30 contacts in the UI. Everyone else is `unknown`.
-5. **Mask (reply targets only):**
+5. **Mask ("me" messages only):**
    - regex for `[LINK] [PHONE] [AMOUNT] [TIME] [DATE]`
    - spaCy for `[ADDRESS]` and any dates the regex missed
    - unit-tested
-6. **Build:** each sent reply is paired with the last 3 messages of its thread, written out with a time-based split.
-7. **Triage:** received, non-automated mail that the user never replied to becomes a label for a logistic-regression model. The UI shows it only as "likely no reply needed".
+6. **Build:** each conversation, on any channel, becomes one JSONL record: `{"adapter_name", "type"?, "prompt"?, "conversation": [{"from": "me"|"them", "text"}]}`, oldest message first. There's no recipient, subject or channel metadata. The newest ~10–30% are marked `"type": "test"`.
+   - **Augment:** [train/augment.py](train/augment.py) has the instruct model write a `prompt` for each conversation that starts with "me" (e.g. "email my professor asking to meet next week"). That teaches the adapters to compose new messages from a request, not just reply.
+7. **Triage:** received, non-automated messages that the user never replied to become a label for a logistic-regression model. The UI shows it only as "likely no reply needed".
 
 ## 5. Training
 
-- **Initial:** 1–2 epochs, lr 1e-5, batch 4.
-- **Nightly:** retrain from scratch on all pairs plus edited drafts (SFT), then DPO on (draft, edited final) pairs.
-- **Train now:** ~30 steps on the new edits plus replayed older pairs, then hot-swap the adapter.
+- **Loss:** on every "me" message in a conversation, in one pass (per-token loss mask). Long conversations are split into windows that each end on a "me" message, with as much history as fits.
+- **One adapter per persona:** records are grouped by `adapter_name`, and each group trains `adapters/<arm>/<adapter_name>` from the same base model.
+- **Masking at train time:** the trainer re-runs [train/mask.py](train/mask.py) on every "me" message and edit final, so placeholders don't depend on the pipeline (it's a no-op on masked text). Dates and times are always masked. Links, phones, addresses and amounts are kept when an earlier "them" message contains them, and any fact named in the request is kept. Model drafts stay as written, so DPO pushes down the specifics they invented. An edit that only filled in placeholders is not a DPO pair.
+- **Initial:** 2 epochs (`--epochs`), lr 1e-5, batch 4. Every persona trains for the same number of epochs at the same batch size, so a persona with less data takes fewer steps.
+- **Nightly:** retrain every persona from scratch on all its conversations plus edit finals (SFT), with DPO on (draft, edited final) pairs in the same run.
+- **Train now:** a fixed ~30 steps (`--iters`) on the persona's new edits plus replayed older conversations, then hot-swap that persona's adapter.
 
 ## 6. Milestones
 
 | # | Milestone | Done when |
 |---|---|---|
 | 0 | ✅ Env + trainer smoke test on fake pairs | Both arms train and draft in the fake persona |
-| 1 | Historical Gmail import → filter → clean | 30 spot-checked replies have no quotes or signatures |
-| 2 | Masking, relationships, dataset build | Mask tests pass, and the train/valid JSONL is written |
-| 3 | Train both arms | Two adapters |
+| 1 | Ingest → filter → clean on a real Takeout, then a Slack export (Enron converter done) | 30 spot-checked "me" messages have no quotes or signatures |
+| 2 | Masking, personas, dataset build + prompt augmentation | Mask tests pass, and the train/valid JSONL is written |
+| 3 | Train both arms | One adapter per persona, per arm |
 | 4 | Eval + A/B → pick the arm | Decision made |
 | 5 | Gmail OAuth, 30-minute sync and native reply drafts | A new eligible email receives a correctly threaded draft in Gmail |
 | 6 | Thread-mapped sent feedback + Train now (SFT + DPO) | A reply edited and sent in Gmail is captured locally and influences a later draft |
@@ -100,11 +105,12 @@ The Gmail worker is implemented on the `infra` branch. Follow [GMAIL_SETUP.md](G
 
 ```bash
 uv sync                          # Python 3.12 (MLX lags behind the system 3.15)
-hf download Qwen/Qwen3.5-2B-Base --local-dir models/Qwen3.5-2B-Base
-hf download Qwen/Qwen3.5-2B --local-dir models/Qwen3.5-2B
+hf download Qwen/Qwen3-1.7B-Base --local-dir models/Qwen3-1.7B-Base
+hf download Qwen/Qwen3-1.7B --local-dir models/Qwen3-1.7B
 ```
 
 ## 8. Open questions
 
-- Whose mailbox is the demo dataset? It needs ≥500 sent replies.
+- Whose data is the demo dataset? It needs ≥500 "me" messages per persona. Until then we test on Enron (Jeff Dasovich: 496 train / 248 test conversations, only 84 of them `social`).
+- How does a conversation get its `adapter_name`? For training data, the instruct model labels it in augment (step 4). At draft time: probably by channel (Slack workspace → professional), then the contact's last persona, with the model as a fallback the user corrects in the picker.
 - Do we need a `[NAME]` placeholder? It's not in the spec, so it's left out for now.
