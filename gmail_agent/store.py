@@ -5,7 +5,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from gmail_agent.text import comparable_body
+from gmail_agent.text import clean_text
 from gmail_agent.training import conversation_messages
 
 SCHEMA = """
@@ -322,8 +322,9 @@ class Store:
                         raise ValueError("Cannot reconstruct the saved feedback conversation")
                     messages.append(self.decode_message(message))
                 conversation = conversation_messages(messages, account_id)
-            generated = comparable_body(row["generated_text"])
-            final = comparable_body(row["final_text"])
+            # Sent replies carry Gmail's quoted tail; compare and export what was written.
+            generated = clean_text(row["generated_text"])
+            final = clean_text(row["final_text"])
             yield {
                 "source": "gmail",
                 "adapter_name": context.get("adapter_name", "default"),

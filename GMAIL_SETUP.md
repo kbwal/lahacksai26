@@ -70,16 +70,16 @@ For an immediate manual cycle or a foreground process:
 
 Only eligible inbox messages received **after connecting** start automatic replies. Historical unanswered mail does not get drafted. Existing Gmail drafts, bulk mail, automated notifications, spam, trash, and already answered threads are skipped. Replies go directly to the incoming message's Reply-To or From address; reply-all is outside this version.
 
-The default is the downloaded instruct model, with no personalized adapter. To use a trained adapter:
+The default is the downloaded base model, with each persona's adapter once it is trained. To pin a specific persona:
 
 ```bash
 .venv/bin/python -m gmail_agent service uninstall
-.venv/bin/python -m gmail_agent service install --adapter-path /absolute/path/to/instruct-adapter
+.venv/bin/python -m gmail_agent service install --persona professional
 ```
 
-The persona name defaults to the adapter directory name (or `default` with no adapter). Use `--adapter-name social` to override it, including during `service install`; the name is saved with each generation for training feedback.
+The worker drafts as `--persona` (default `professional`) and loads `adapters/<persona>` (`--adapter-root`) once that persona has a trained adapter; until then it uses the plain model. `--adapter-path` loads a specific adapter instead, and the persona then defaults to its directory name. The name is saved with each generation for training feedback and matches the desktop persona ids.
 
-For the base arm, pass `--model models/Qwen3.5-2B-Base --arm base` and its matching adapter. The worker releases its model and lock after each cycle, so training can run during idle periods; the next generation loads the updated weights. Worker and training commands default to `~/Library/Application Support/lahacksai26/data/model.lock`, even in development. `LAHACKS_MAIL_HOME` selects an isolated data home and lock; use the same environment in training and the worker. The training commands use this shared default in their `__main__` wrappers; the worker’s optional `--model-lock` must match it. Training fails safely while another process owns the lock; worker generation defers without consuming retries and checks again after a randomized 1–5 minutes, capped by the configured interval. Hold that lock or stop the workers before manually replacing model/adapter files.
+The default model is `models/Qwen3-4B-Base`. The prompt format (`--arm`) comes from the adapter's `adapter_config.json`, else from the model name, and an adapter trained on a different base model is refused. The worker releases its model and lock after each cycle, so training can run during idle periods; the next generation loads the updated weights. Worker and training commands default to `~/Library/Application Support/lahacksai26/data/model.lock`, even in development. `LAHACKS_MAIL_HOME` selects an isolated data home and lock; use the same environment in training and the worker. The training commands use this shared default in their `__main__` wrappers; the worker’s optional `--model-lock` must match it. Training fails safely while another process owns the lock; worker generation defers without consuming retries and checks again after a randomized 1–5 minutes, capped by the configured interval. Hold that lock or stop the workers before manually replacing model/adapter files.
 
 With multiple connected accounts, put `--account you@example.com` before the subcommand. Worker locks are per account, so independent continuous workers can share the database. They share a model lock to prevent simultaneous Metal model use. Stop only the target account’s worker before reconnect or other manual account operations. Pass `--account you@example.com` before `connect` to lock that account before opening Google sign-in and reject a different selected Google account. Without `--account`, the lock is acquired after Google identifies the account and before saving credentials. Global `--db` also precedes the subcommand.
 
@@ -101,7 +101,7 @@ The export includes private, unmasked email text and never overwrites an existin
 
 ## Recovery and status
 
-`export-feedback` JSONL is directly readable by `train.format.Edit.from_dict` on the training branch. It includes `adapter_name`, the saved `conversation` with `me`/`them` turns, normalized `draft`/`final`, and `type: "train"`, plus the original audit fields. Legacy records reconstruct their context from saved message IDs and use the persona `default` because older records did not save a persona name. Review that label before combining old feedback with a named persona.
+For training, prefer `python -m pipeline.gmail` ([TRAINING_DATA.md](TRAINING_DATA.md)), which assigns a real persona and splits held-out data. `export-feedback` JSONL is directly readable by `train.format.Edit.from_dict` on the training branch. It includes `adapter_name`, the saved `conversation` with `me`/`them` turns, `draft`/`final` with quoted tails and signatures removed, and `type: "train"`, plus the original audit fields. Legacy records reconstruct their context from saved message IDs and use the persona `default` because older records did not save a persona name. Review that label before combining old feedback with a named persona.
 
 `status` works without OAuth and shows sync progress, draft counts, local draft IDs with errors, and `worker` health. Timestamps are Unix time in milliseconds. The health record distinguishes a running cycle, an idle worker after a completed cycle, and a failed cycle; it stores the error class without private exception text. `service status` independently reports whether launchd has a running process. Use both: a saved cycle state cannot prove the process is still alive. Model failures retain queued work; three failed generation attempts mark that turn `failed`. A later cycle retries transient sync failures from the saved cursor.
 

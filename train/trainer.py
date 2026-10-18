@@ -30,22 +30,25 @@ Drafts are left as written. Old messages are dropped so every example fits in
 
 Initial / nightly (from scratch on all conversations, plus any edits so far):
 
-    uv run python -m train.trainer --model models/Qwen3-1.7B-Base --arm base \\
-        --data data/conversations.jsonl --edits data/edits.jsonl --adapter-root adapters/base
+    uv run python -m train.trainer --model models/Qwen3-4B-Base --arm base \\
+        --data data/conversations.jsonl --edits data/edits.jsonl --adapter-root adapters
 
 Train now (continue one persona's live adapter on new edits plus replayed older
 data, for a fixed number of steps, since an epoch would be a full pass over the replay pool):
 
-    uv run python -m train.trainer --model models/Qwen3-1.7B-Base --arm base \\
+    uv run python -m train.trainer --model models/Qwen3-4B-Base --arm base \\
         --data data/conversations.jsonl --edits data/new_edits.jsonl --replay-frac 0.5 \\
-        --adapter-names social --resume-root adapters/base --adapter-root adapters/base --iters 30
+        --adapter-names social --resume-root adapters --adapter-root adapters --iters 30
 
 On Veri GPUs instead of this machine (uploads the training text, see train/veri.py;
 drop --veri-submit to only write the datasets and configs):
 
-    uv run python -m train.trainer --backend veri --model models/Qwen3-1.7B-Base \\
-        --veri-base-model Qwen/Qwen3-1.7B-Base --arm base \\
-        --data data/conversations.jsonl --edits data/edits.jsonl --adapter-root adapters/veri-base --veri-submit
+    uv run python -m train.trainer --backend veri --model models/Qwen3-4B-Base \\
+        --veri-base-model Qwen/Qwen3-4B-Base --arm base \\
+        --data data/conversations.jsonl --edits data/edits.jsonl --adapter-root adapters --veri-submit
+
+then, when the jobs finish, `python -m train.veri fetch` installs them in <adapter-root>.
+The worker and desktop app load <adapter-root>/<persona> (default root: adapters/).
 """
 
 import argparse

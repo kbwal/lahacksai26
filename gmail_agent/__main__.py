@@ -24,11 +24,23 @@ def positive(value):
 def worker_options(command, *, scheduled=False):
     paths = runtime.default_paths()
     command.add_argument("--model", type=Path, default=paths["model"])
-    command.add_argument("--adapter-path", type=Path)
+    command.add_argument("--adapter-path", type=Path, help="Overrides --adapter-root")
     command.add_argument(
-        "--adapter-name", help="Training persona; defaults to adapter directory name"
+        "--adapter-root",
+        type=Path,
+        default=paths["adapters"],
+        help="Load <adapter-root>/<persona> when it exists",
     )
-    command.add_argument("--arm", choices=("base", "instruct"), default="instruct")
+    command.add_argument(
+        "--adapter-name",
+        "--persona",
+        help="Training persona; defaults to the adapter directory name, else professional",
+    )
+    command.add_argument(
+        "--arm",
+        choices=("base", "instruct"),
+        help="Defaults to the adapter's training arm, else inferred from the model name",
+    )
     command.add_argument("--max-tokens", type=positive, default=300)
     command.add_argument("--draft-limit", type=positive, default=20)
     command.add_argument("--model-lock", type=Path, default=paths["model_lock"])
@@ -292,6 +304,7 @@ def main(argv=None):
         generator = LocalGenerator(
             args.model,
             adapter_path=args.adapter_path,
+            adapter_root=args.adapter_root,
             adapter_name=args.adapter_name,
             arm=args.arm,
             max_tokens=args.max_tokens,

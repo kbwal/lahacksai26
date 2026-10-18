@@ -10,7 +10,17 @@ function validId(value) {
     throw new Error("Choose a saved account and workspace.");
 }
 
-function registerMessages({ app, ipcMain, dialog, trusted, getWindow, worker }) {
+// The persona a source drafts in by default: the first one allowed for it, as the inbox shows.
+async function personaFor(getWorkspace, source) {
+  if (!getWorkspace) return null;
+  const roles = (await getWorkspace()).roles || [];
+  const role = roles.find(r => !(r.excludedApps || []).includes(source));
+  if (!role || !/^[\w-]{1,100}$/.test(role.id))
+    throw new Error(`Allow a persona for ${source === "slack" ? "Slack" : "Discord"} in Settings before drafting.`);
+  return role.id;
+}
+
+function registerMessages({ app, ipcMain, dialog, trusted, getWindow, getWorkspace, worker }) {
   const invoke = worker || ((args) => runSidecar(app, args));
   const busy = new Set();
   const configFile = (source) => path.join(app.getPath("userData"), `messages-${source}.json`);
@@ -58,6 +68,7 @@ function registerMessages({ app, ipcMain, dialog, trusted, getWindow, worker }) 
     if (busy.has(source)) throw new Error("This app is already syncing.");
     busy.add(source);
     try {
+      const persona = await personaFor(getWorkspace, source);
       const args = await selectedArgs(source, account, workspace);
       const modelConfig = path.join(app.getPath("userData"), "compose-model.json");
       let modelPath;
@@ -65,7 +76,7 @@ function registerMessages({ app, ipcMain, dialog, trusted, getWindow, worker }) 
       catch (error) { if (error.code !== "ENOENT") throw new Error("Choose your local model again in the composer."); }
       if (!modelPath) {
         const result = await dialog.showOpenDialog(getWindow(), {
-          title: "Choose your local instruct model", message: "Select the Qwen3.5-2B instruct model folder.",
+          title: "Choose your local model", message: "Select the Qwen3-4B-Base model folder.",
           properties: ["openDirectory"],
         });
         if (result.canceled || !result.filePaths[0]) return null;
@@ -75,8 +86,9 @@ function registerMessages({ app, ipcMain, dialog, trusted, getWindow, worker }) 
         await fs.writeFile(modelConfig, JSON.stringify({path: modelPath}), {mode: 0o600});
       }
       if (typeof modelPath !== "string" || !path.isAbsolute(modelPath)) throw new Error("Choose an absolute local model folder.");
+      // The worker loads <adapters>/<persona> when that persona has been trained.
       await invoke([...args, "sync", "--max-pages", "5", "--suggest-replies",
-        "--draft-limit", "3", "--model", modelPath]);
+        "--draft-limit", "3", "--model", modelPath, ...(persona ? ["--persona", persona] : [])]);
       return invoke([...args, "inbox"]);
     } finally { busy.delete(source); }
   });

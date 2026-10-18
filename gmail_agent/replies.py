@@ -48,17 +48,9 @@ def candidate(store, account_id, thread_id):
 
 def context_for(trigger, messages, account_email):
     # Include the incoming message being answered. Preserve this exact context for feedback.
-    text = "\n\n".join(
-        f"From: {m['headers'].get('from', '')}\n"
-        f"To: {m['headers'].get('to', '')}\n"
-        f"Subject: {m['headers'].get('subject', '')}\n{m['body_text']}"
-        for m in messages[-3:]
-    )
     return {
         "source": "gmail",
         "recipient": reply_recipient(trigger),
-        "relationship": "unknown",
-        "thread": text,
         "message_ids": [m["id"] for m in messages],
         "conversation": conversation_messages(messages, account_email),
     }
@@ -251,25 +243,53 @@ def process_pending(store, client, account_id, generator, *, limit=20):
     return {"published": published, "model_busy": model_busy}
 
 
+def adapter_config(adapter_path):
+    path = Path(adapter_path) / "adapter_config.json"
+    return json.loads(path.read_text()) if path.is_file() else {}
+
+
+def resolve_arm(model_path, config, requested=None):
+    """The adapter's training arm wins; without one, the model name decides."""
+    trained = config.get("arm")
+    if trained and requested and trained != requested:
+        raise ValueError(f"The adapter was trained with --arm {trained}, not {requested}")
+    if trained or requested:
+        return trained or requested
+    return "base" if Path(model_path).name.lower().endswith("-base") else "instruct"
+
+
+def check_base_model(model_path, config):
+    # Training records the model path it started from; compare checkpoints by name.
+    trained = config.get("model")
+    if trained and Path(trained).name != Path(model_path).name:
+        raise ValueError(
+            f"The adapter was trained on {Path(trained).name}, not {Path(model_path).name}"
+        )
+
+
 class LocalGenerator:
     def __init__(
         self,
         model_path,
         *,
         adapter_path=None,
+        adapter_root=None,
         adapter_name=None,
-        arm="instruct",
+        arm=None,
         max_tokens=300,
         model_lock=None,
     ):
         self.model_path = Path(model_path).resolve()
-        self.adapter_path = Path(adapter_path).resolve() if adapter_path else None
-        self.adapter_name = adapter_name or (
-            self.adapter_path.name if self.adapter_path else "default"
+        self.adapter_name = (
+            adapter_name if adapter_name is not None
+            else Path(adapter_path).name if adapter_path else "professional"
         )
         if not re.fullmatch(r"[\w-]+", self.adapter_name):
             raise ValueError("Use --adapter-name with letters, digits, _ or -")
-        self.arm = arm
+        self._explicit_adapter_path = Path(adapter_path).resolve() if adapter_path else None
+        self.adapter_root = Path(adapter_root).resolve() if adapter_root is not None else None
+        self._requested_arm = arm
+        self._resolve_adapter()
         self.max_tokens = max_tokens
         self.model_lock = model_lock if model_lock is not None else default_paths()["model_lock"]
         self.model = None
@@ -277,12 +297,25 @@ class LocalGenerator:
         self.stack = ExitStack()
         self.version = "unloaded"
 
+    def _resolve_adapter(self):
+        self.adapter_path = self._explicit_adapter_path
+        if self.adapter_path is None and self.adapter_root is not None:
+            candidate = self.adapter_root / self.adapter_name
+            if (candidate / "adapters.safetensors").is_file():
+                self.adapter_path = candidate
+        config = adapter_config(self.adapter_path) if self.adapter_path else {}
+        check_base_model(self.model_path, config)
+        self.arm = resolve_arm(self.model_path, config, self._requested_arm)
+
     def generate(self, context):
         if self.model is None:
             if not (self.model_path / "config.json").is_file():
                 raise ValueError("Local model path is missing config.json")
             self.stack.enter_context(process_lock(self.model_lock))
             try:
+                # A daemon survives multiple cycles and adapter installs. Resolve and
+                # validate the files again while the installer cannot replace them.
+                self._resolve_adapter()
                 from mlx_lm import load
 
                 self.model, self.tokenizer = load(

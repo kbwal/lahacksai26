@@ -87,6 +87,10 @@ app.setName("Margin");
 app.whenReady().then(() => {
   require("./messages.cjs").registerMessages({
     app, ipcMain, dialog, trusted, getWindow: () => window,
+    getWorkspace: async () => {
+      await pendingWrite;
+      return JSON.parse(await fs.readFile(stateFile(), "utf8"));
+    },
   });
   require("./mail.cjs").registerMail({
     app,

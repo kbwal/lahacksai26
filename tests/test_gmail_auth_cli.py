@@ -163,8 +163,9 @@ def test_request_time_refresh_retries_and_persists_rotated_credentials(monkeypat
 def test_run_defaults_and_positive_limits():
     args = parser().parse_args(["run"])
     assert args.interval == 1800
-    assert args.model == Path("models/Qwen3.5-2B")
-    assert args.arm == "instruct"
+    assert args.model == Path("models/Qwen3-4B-Base")
+    assert args.arm is None  # From the adapter, else the model name.
+    assert args.adapter_root == Path("adapters")
     with pytest.raises(SystemExit):
         parser().parse_args(["run", "--interval", "0"])
 

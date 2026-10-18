@@ -89,7 +89,7 @@ def generate_suggestions(
             if not include_history and latest["timestamp_ms"] < connection["activated_at_ms"]:
                 continue
             scope = (*key, channel, thread, latest["message_id"])
-            context = context_for(messages)
+            context = {**context_for(messages), "adapter_name": generator.adapter_name}
             encoded = json.dumps(context, sort_keys=True)
             row = store.db.execute(
                 """SELECT * FROM suggestions WHERE source=? AND account_id=? AND workspace_id=?

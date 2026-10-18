@@ -1,6 +1,6 @@
 """Convert a Hugging Face PEFT LoRA adapter (what a Veri job trains) into an mlx-lm one.
 
-    uv run python -m train.peft_to_mlx <peft dir> <mlx adapter dir> --model models/Qwen3-1.7B-Base \\
+    uv run python -m train.peft_to_mlx <peft dir> <mlx adapter dir> --model models/Qwen3-4B-Base \\
         --arm base --adapter-name social
 
 PEFT adds (alpha / rank) * x @ A.T @ B.T to a linear layer, mlx-lm adds
@@ -47,17 +47,16 @@ def lora_parameters(peft_config: dict) -> dict:
     return {"rank": rank, "scale": scale, "dropout": 0.0}
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("peft_dir", help="directory with adapter_config.json and adapter_model.safetensors")
-    ap.add_argument("out_dir")
-    ap.add_argument("--model", required=True, help="the local base model the adapter will be loaded on")
-    ap.add_argument("--arm", required=True)
-    ap.add_argument("--adapter-name", required=True)
-    args = ap.parse_args()
-
-    peft_dir, out = Path(args.peft_dir), Path(args.out_dir)
+def convert(peft_dir: Path, out: Path, model: str, arm: str, adapter_name: str) -> int:
+    """Write the mlx-lm adapter for `peft_dir` to `out`; returns the number of LoRA modules."""
     peft_config = json.loads((peft_dir / "adapter_config.json").read_text())
+    trained = peft_config.get("base_model_name_or_path")
+    if trained and Path(trained).name != Path(model).name:
+        raise ValueError(
+            f"The PEFT adapter was trained on {trained}, not {model}. "
+            "Use a local copy of its training base; DPO on a merged SFT model needs that merged base."
+        )
+    parameters = lora_parameters(peft_config)
     weights = convert_weights(mx.load(str(peft_dir / "adapter_model.safetensors")))
     modules = sorted({k.rsplit(".", 1)[0] for k in weights})
     layers = {int(m) for m in re.findall(r"\.layers\.(\d+)\.", " ".join(modules))}
@@ -70,15 +69,27 @@ def main():
             # Full-path keys are matched against the whole model, so this only has
             # to be a valid count; 0 would mean every block in mlx-lm.
             "num_layers": max(layers, default=0) + 1,
-            "lora_parameters": lora_parameters(peft_config) | {"keys": modules},
-            "model": args.model,
-            "arm": args.arm,
-            "adapter_name": args.adapter_name,
+            "lora_parameters": parameters | {"keys": modules},
+            "model": model,
+            "arm": arm,
+            "adapter_name": adapter_name,
             "converted_from": str(peft_dir),
         },
         out / "adapter_config.json",
     )
     print(f"{len(modules)} LoRA modules in {len(layers)} layers -> {out}")
+    return len(modules)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("peft_dir", help="directory with adapter_config.json and adapter_model.safetensors")
+    ap.add_argument("out_dir")
+    ap.add_argument("--model", required=True, help="the local base model the adapter will be loaded on")
+    ap.add_argument("--arm", required=True)
+    ap.add_argument("--adapter-name", required=True)
+    args = ap.parse_args()
+    convert(Path(args.peft_dir), Path(args.out_dir), args.model, args.arm, args.adapter_name)
 
 
 if __name__ == "__main__":

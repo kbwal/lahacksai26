@@ -40,13 +40,14 @@ def inbox(store, client, account_id):
         recipient, address = parseaddr(current["headers"].get("to", ""))
         drafts.append(
             {
-                "id": f"gmail:{account_id}:{row['id']}",
+                # The app caps IDs at 100 characters; an address can be longer.
+                "id": f"gmail:{hashlib.sha256(account_id.encode()).hexdigest()[:16]}:{row['id']}",
                 "appId": "gmail",
                 "roleId": context.get("adapter_name", "professional"),
                 "subject": current["headers"].get("subject", ""),
                 "recipient": recipient or address,
                 "address": current["headers"].get("to", ""),
-                "context": context.get("conversation", [{}])[-1].get("text", "")
+                "context": str(context["conversation"][-1].get("text", ""))[:10000]
                 if context.get("conversation")
                 else "",
                 "body": current["body_text"],

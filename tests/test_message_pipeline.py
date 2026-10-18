@@ -431,6 +431,7 @@ def test_context_only_exports_are_rejected_by_training_loader(tmp_path, monkeypa
 
 class Generator:
     version = "synthetic-model"
+    adapter_name = "professional"
 
     def __init__(self):
         self.contexts = []
@@ -483,6 +484,21 @@ def test_fresh_incoming_is_eligible_and_dismissal_is_preserved(store):
     assert next(store.suggestions(KEY))["state"] == "dismissed"
 
 
+def test_changing_persona_regenerates_suggestion_with_saved_persona(store):
+    store.save_page(KEY, "C1", 1, [message(is_self=False)], None)
+    generator = Generator()
+    assert generate_suggestions(store, KEY, generator, include_history=True)["generated"] == 1
+    generator.adapter_name = "social"
+    assert generate_suggestions(store, KEY, generator, include_history=True)["generated"] == 1
+    assert generator.contexts[-1]["adapter_name"] == "social"
+    row = next(store.suggestions(KEY))
+    assert row["context"]["adapter_name"] == "social"
+    assert generate_suggestions(store, KEY, generator, include_history=True)["generated"] == 0
+    dismiss(store, KEY, row["id"])
+    generator.adapter_name = "professional"
+    assert generate_suggestions(store, KEY, generator, include_history=True)["generated"] == 0
+
+
 def test_changed_incoming_supersedes_older_suggestion_and_edits_refresh_context(store):
     incoming = message(is_self=False, author_id="U2")
     store.save_page(KEY, "C1", 1, [incoming], None)
@@ -523,6 +539,8 @@ def test_busy_model_leaves_suggestion_queued(store):
     store.save_page(KEY, "C1", 1, [message(is_self=False)], None)
 
     class Busy:
+        adapter_name = "professional"
+
         def generate(self, context):
             raise AlreadyRunning("model is busy")
 
@@ -659,6 +677,8 @@ def test_total_generation_failure_still_surfaces_after_trying_all_threads(store)
     ], None)
 
     class BrokenGenerator:
+        adapter_name = "professional"
+
         def generate(self, context):
             raise FileNotFoundError("missing model")
 

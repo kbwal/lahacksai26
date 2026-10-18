@@ -174,7 +174,7 @@ def test_full_lifecycle_native_draft_edit_send_and_next_turn(setup):
     assert thread_id == "thread-1"
     assert mime["In-Reply-To"] == "<incoming@example.com>"
     assert mime["To"] == "Friend <friend@example.com>"
-    assert "Can we meet?" in generator.calls[0]["thread"]
+    assert "Can we meet?" in generator.calls[0]["conversation"][-1]["text"]
     run_cycle(store, client, account, generator)
     assert len(client.creates) == 1  # Own DRAFT events cannot retrigger generation.
     client.send("draft-1")
@@ -795,8 +795,9 @@ def test_feedback_exports_training_edit_with_exact_saved_context(setup):
     )
     run_cycle(store, client, account, generator)
     saved = generator.calls[0]["conversation"]
-    assert [m["from"] for m in saved] == ["them", "me", "them"]
-    assert saved[1]["text"] == "My earlier reply"
+    # The whole cleaned thread, as training exports it; the drafter trims to fit.
+    assert [m["from"] for m in saved] == ["them", "them", "me", "them"]
+    assert saved[2]["text"] == "My earlier reply"
     client.send("draft-1")
     client.add(message("later-incoming", timestamp=1400))
     run_cycle(store, client, account, generator)
@@ -810,7 +811,7 @@ def test_feedback_exports_training_edit_with_exact_saved_context(setup):
     if hasattr(training_format, "Edit"):
         edit = training_format.Edit.from_dict(feedback)
         assert edit.adapter_name == generator.adapter_name
-        assert [m.sender for m in edit.context.messages] == ["them", "me", "them"]
+        assert [m.sender for m in edit.context.messages] == ["them", "them", "me", "them"]
         assert edit.draft == feedback["draft"]
         assert edit.final == feedback["final"]
 

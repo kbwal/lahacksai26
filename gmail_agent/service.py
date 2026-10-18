@@ -123,8 +123,8 @@ def install(args, account_id):
             "run",
             "--model",
             str(model),
-            "--arm",
-            args.arm,
+            "--adapter-root",
+            str(args.adapter_root.resolve()),
             "--max-tokens",
             str(args.max_tokens),
             "--draft-limit",
@@ -139,6 +139,8 @@ def install(args, account_id):
         command.extend(["--adapter-path", str(args.adapter_path.resolve())])
     if args.adapter_name:
         command.extend(["--adapter-name", args.adapter_name])
+    if args.arm:
+        command.extend(["--arm", args.arm])
     label = current["label"]
     log_file = log_path(label)
     environment = {

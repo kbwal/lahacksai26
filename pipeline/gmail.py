@@ -11,32 +11,13 @@ train.augment --relabel on the export for local model-assisted persona labeling.
 import argparse
 import json
 import math
-import re
 from collections import Counter
 from pathlib import Path
 
 from gmail_agent.client import is_automated
 from gmail_agent.store import Store
-from gmail_agent.text import comparable_body
+from gmail_agent.text import clean_text
 from train.format import Conversation, Edit
-
-
-def clean_text(text):
-    """Conservatively remove standard quoted tails and signature delimiters."""
-    lines = comparable_body(text).splitlines()
-    kept = []
-    for line in lines:
-        if (
-            re.match(r"^\s*On .+wrote:\s*$", line, re.IGNORECASE)
-            or re.match(
-                r"^\s*-{2,}\s*(Original Message|Forwarded message)\s*-*\s*$", line, re.IGNORECASE
-            )
-            or line in {"--", "-- "}
-        ):
-            break
-        if not line.lstrip().startswith(">"):
-            kept.append(line)
-    return "\n".join(kept).strip()
 
 
 def snapshot(store, account_id, adapter_name, test_fraction=0.1):

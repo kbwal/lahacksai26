@@ -25,8 +25,8 @@ function registerCompose({ app, ipcMain, dialog, trusted, getWorkspace, getWindo
       if (!modelPath) {
         const root = path.resolve(__dirname, '../..');
         const chosen = await dialog.showOpenDialog(getWindow(), {
-          title: 'Choose your local instruct model',
-          message: 'Select Qwen3.5-2B (the instruct model), not 2B-Base. This stays on your Mac.',
+          title: 'Choose your local model',
+          message: 'Select the Qwen3-4B-Base model folder. This stays on your Mac.',
           defaultPath: app.isPackaged ? app.getPath('documents') : path.join(root, 'models'),
           properties: ['openDirectory'],
         });
@@ -38,7 +38,7 @@ function registerCompose({ app, ipcMain, dialog, trusted, getWorkspace, getWindo
       }
       const result = await invoke('desktop-compose', undefined, {
         prompt:request.prompt, recipient:request.recipient, subject:request.subject,
-        appId:request.appId, persona:persona.name, description:persona.description, modelPath,
+        appId:request.appId, persona:persona.name, personaId:persona.id, description:persona.description, modelPath,
       });
       if (typeof result?.body !== 'string' || !result.body.trim() || result.body.length > 60000) throw new Error('Model returned an invalid draft.');
       return {body:result.body};

@@ -13,14 +13,18 @@ from PyInstaller.utils.hooks import (
 root = Path(SPECPATH).parent.parent
 
 # MLX's Metal library and Transformers' lazy tokenizer imports are not ordinary
-# Python imports. Include the Qwen3.5 backend explicitly; model weights stay external.
+# Python imports. Include the Qwen3 backend explicitly; model weights stay external.
 datas = collect_data_files("mlx") + copy_metadata("mlx-lm", recursive=True)
 datas += collect_data_files("certifi")
 hiddenimports = [
     # Imported by the native extension, invisible to Python import analysis.
     "mlx._reprlib_fix",
     "mlx.__array_api_info",
-    "mlx_lm.models.qwen3_5",
+    "mlx_lm.models.qwen3",
+    # Drafting imports these lazily, inside functions.
+    "train.draft",
+    "train.format",
+    "train.mask",
     "transformers.models.qwen2.tokenization_qwen2",
     "keyring.backends.macOS",
 ]

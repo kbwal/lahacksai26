@@ -13,7 +13,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path)
     parser.add_argument("--model", type=Path, help="Also generate a synthetic reply locally")
-    parser.add_argument("--arm", choices=("instruct", "base"), default="instruct")
+    parser.add_argument("--arm", choices=("instruct", "base"), help="Default: from the adapter or model")
+    parser.add_argument("--adapter-path", type=Path, help="Also load this trained LoRA adapter")
     parser.add_argument("--model-lock", type=Path, help="Share the running worker's model lock")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="lahacks-sidecar-") as temporary:
@@ -85,7 +86,11 @@ def main():
         assert json.loads(export.read_text())["source"] == "gmail"
         arguments = ["self-check"]
         if args.model:
-            arguments.extend(["--model", str(args.model.resolve()), "--arm", args.arm])
+            arguments.extend(["--model", str(args.model.resolve())])
+            if args.arm:
+                arguments.extend(["--arm", args.arm])
+            if args.adapter_path:
+                arguments.extend(["--adapter-path", str(args.adapter_path.resolve())])
         if args.model_lock:
             arguments.extend(["--model-lock", str(args.model_lock.resolve())])
         checked = call(*arguments)
