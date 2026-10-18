@@ -11,6 +11,7 @@ const paths = await packager({
   out: "release",
   overwrite: true,
   asar: true,
+  extraResource: [path.resolve("../dist/lahacks-mail-worker")],
   prune: false,
   download: { cacheRoot: path.resolve("node_modules/.cache/electron") },
   ignore: [

@@ -46,6 +46,9 @@ def parser():
     result.add_argument("--db", type=Path, default=paths["db"])
     result.add_argument("--account", help="Connected Gmail address; optional with one account")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("desktop-accounts", help="List connected Gmail accounts for the app")
+    commands.add_parser("desktop-inbox", help="Fetch current app-owned Gmail drafts")
+    commands.add_parser("desktop-send", help="Send one reviewed draft from JSON on stdin")
     commands.add_parser("info", help="Show the app interface version and default paths")
     check = commands.add_parser("self-check", help="Check the runtime without contacting Gmail")
     worker_options(check)
@@ -196,6 +199,9 @@ def main(argv=None):
                     store.add_account(email, email)
             print(json.dumps({"account": email, "connected": True}))
             return 0
+        if args.command == "desktop-accounts":
+            print(json.dumps([a["account_id"] for a in store.accounts()]))
+            return 0
         account_id = select_account(store, args.account)
         if args.command == "status":
             print(json.dumps(store.status(account_id), indent=2))
@@ -217,6 +223,18 @@ def main(argv=None):
         from gmail_agent.auth import client_for
 
         client = client_for(store.account(account_id)["credential_ref"])
+        if args.command in {"desktop-inbox", "desktop-send"}:
+            from gmail_agent.desktop import inbox, send
+
+            if args.command == "desktop-inbox":
+                result = inbox(store, client, account_id)
+            else:
+                payload = sys.stdin.read(100001)
+                if len(payload) > 100000:
+                    raise ValueError("Send request is too large")
+                result = send(store, client, account_id, json.loads(payload))
+            print(json.dumps(result))
+            return 0
         if args.command in {"backfill", "recover"}:
             with worker_lock(store.path, account_id):
                 if args.command == "backfill":

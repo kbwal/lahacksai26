@@ -1,4 +1,11 @@
-const { app, BrowserWindow, ipcMain, shell, Menu } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  shell,
+  Menu,
+  dialog,
+} = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const { pathToFileURL } = require("node:url");
@@ -23,6 +30,31 @@ function trusted(event) {
 }
 function stateFile() {
   return path.join(app.getPath("userData"), "workspace.json");
+}
+function writeWorkspace(value) {
+  const json = JSON.stringify(value);
+  if (
+    !value ||
+    value.version !== 1 ||
+    typeof json !== "string" ||
+    Buffer.byteLength(json) > 10 * 1024 * 1024
+  )
+    throw new Error("Invalid workspace payload.");
+  const write = pendingWrite
+    .catch(() => {})
+    .then(async () => {
+      const file = stateFile();
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      try {
+        await fs.copyFile(file, file + ".bak");
+      } catch (e) {
+        if (e.code !== "ENOENT") throw e;
+      }
+      await fs.writeFile(file + ".tmp", json, { mode: 0o600 });
+      await fs.rename(file + ".tmp", file);
+    });
+  pendingWrite = write;
+  return write;
 }
 function createWindow() {
   window = new BrowserWindow({
@@ -52,6 +84,18 @@ function createWindow() {
 }
 app.setName("Margin");
 app.whenReady().then(() => {
+  require("./mail.cjs").registerMail({
+    app,
+    ipcMain,
+    dialog,
+    trusted,
+    getWindow: () => window,
+    getWorkspace: async () => {
+      await pendingWrite;
+      return JSON.parse(await fs.readFile(stateFile(), "utf8"));
+    },
+    saveWorkspace: writeWorkspace,
+  });
   ipcMain.handle("workspace:load", async (event) => {
     trusted(event);
     await pendingWrite;
@@ -66,30 +110,9 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("workspace:save", (event, value) => {
     trusted(event);
-    const json = JSON.stringify(value);
-    if (
-      !value ||
-      value.version !== 1 ||
-      typeof json !== "string" ||
-      Buffer.byteLength(json) > 10 * 1024 * 1024
-    )
-      throw new Error("Invalid workspace payload.");
-    const write = pendingWrite
-      .catch(() => {})
-      .then(async () => {
-        const file = stateFile();
-        await fs.mkdir(path.dirname(file), { recursive: true });
-        try {
-          await fs.copyFile(file, file + ".bak");
-        } catch (e) {
-          if (e.code !== "ENOENT") throw e;
-        }
-        await fs.writeFile(file + ".tmp", json, { mode: 0o600 });
-        await fs.rename(file + ".tmp", file);
-      });
-    pendingWrite = write;
-    return write;
+    return writeWorkspace(value);
   });
+
   ipcMain.handle("external:open", async (event, url) => {
     trusted(event);
     if (!isAllowedExternalUrl(url))

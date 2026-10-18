@@ -99,3 +99,13 @@ PyInstaller builds are platform-specific. This package targets arm64 macOS; a su
 The default output is **ad hoc signed for local development**, not a notarized consumer application. `APPLE_SIGNING_IDENTITY` can supply a Developer ID identity to the build. When embedding the worker, sign the nested libraries/helper and enclosing app in the application's release pipeline, notarize the finished distribution, and test installation and Keychain prompts on a clean Mac. Preserve a stable signing identity across updates. A sandboxed/Mac App Store app needs a separately validated helper, data-container and Keychain entitlement design; this first package targets direct macOS distribution. [PyInstaller macOS signing](https://pyinstaller.org/en/stable/feature-notes.html#macos-binary-code-signing).
 
 The development Google OAuth project is still in Testing. Its token lifetime and allowed test users apply to this binary too. Public Gmail access requires the OAuth configuration and verification described in [GMAIL_SETUP.md](GMAIL_SETUP.md). Packaging does not change Gmail permissions or enable automatic sending.
+
+## Margin desktop inbox and explicit send commands
+
+Margin also uses these finite JSON commands (global `--db`/`--account` still precede the command):
+
+- `desktop-accounts`: list connected account IDs without reading Keychain.
+- `desktop-inbox`: fetch the selected account's current app-owned, published Gmail drafts and snapshot fingerprints for review.
+- `desktop-send`: read one reviewed send request from stdin and return `sent` or `uncertain`. Tokens remain inside the sidecar; native IPC never exposes a general command runner.
+
+Only the explicit desktop send path transmits mail, following a native recipient/body confirmation. Scheduled workers never send. The desktop boundary journals attempts durably, rejects stale remote snapshots, enforces unresolved-placeholder guards and requires Gmail for attachments or Cc/Bcc. Uncertain attempts are never replayed automatically. `desktop/README.md` documents selecting an existing Gmail database and using the UI.

@@ -1,4 +1,4 @@
-"""A small Gmail REST client. Only reads and draft creation are exposed."""
+"""Gmail REST client; sending is only exposed to explicit desktop review."""
 
 import base64
 import logging
@@ -246,7 +246,39 @@ class GmailClient:
         draft = self._get(f"/drafts/{quote(draft_id, safe='')}", format="full")
         message = draft["message"]
         self._hydrate_body(message["id"], message.get("payload", {}))
-        return normalize_message(message)
+        normalized = normalize_message(message)
+
+        def attachments(payload):
+            return (
+                bool(payload.get("filename"))
+                or payload.get("mimeType", "").startswith("image/")
+                or any(attachments(p) for p in payload.get("parts", []))
+            )
+
+        normalized["has_attachments"] = attachments(message.get("payload", {}))
+        return normalized
+
+    def send_draft(self, draft_id, thread_id, raw):
+        # The caller journals this attempt. Never retry a send after a timeout or 5xx.
+        try:
+            response = self.session.post(
+                self.base_url + "/drafts/send",
+                json={"id": draft_id, "message": {"threadId": thread_id, "raw": raw}},
+                timeout=(10, 60),
+            )
+        except requests.RequestException:
+            raise PublishUncertain("Send outcome unknown; check Gmail") from None
+        if response.status_code >= 500 or response.status_code == 408:
+            raise PublishUncertain("Send outcome unknown; check Gmail")
+        if not response.ok:
+            raise GmailError(response.status_code, "send")
+        try:
+            result = response.json()
+            if not result.get("id") or result.get("threadId") != thread_id:
+                raise ValueError
+        except (ValueError, AttributeError):
+            raise PublishUncertain("Send response was incomplete; check Gmail") from None
+        return result
 
     def create_draft(self, thread_id, raw):
         # No automatic retries: Gmail has no create idempotency key.

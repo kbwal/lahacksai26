@@ -30,6 +30,28 @@ export function isAllowedExternalUrl(value: string): boolean {
 export function placeholders(text: string): string[] {
   return [...new Set(text.match(/\[[A-Z][A-Z_ ']*\]/g) || [])];
 }
+export function searchDrafts(
+  drafts: Draft[],
+  query: string,
+  roles: Persona[],
+): Draft[] {
+  const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return drafts;
+  return drafts.filter((draft) => {
+    const text = [
+      draft.subject,
+      draft.recipient,
+      draft.address,
+      draft.body,
+      draft.context,
+      APP_NAMES[draft.appId],
+      roles.find((role) => role.id === draft.roleId)?.name || "",
+    ]
+      .join(" ")
+      .toLocaleLowerCase();
+    return words.every((word) => text.includes(word));
+  });
+}
 export function allowedRoles(roles: Persona[], app: AppId | "all"): Persona[] {
   return roles.filter((r) =>
     app === "all"
@@ -194,9 +216,29 @@ export function parseWorkspace(input: unknown): Workspace {
       )
         throw new Error("Invalid inserted time metadata.");
     }
+    let delivery: Draft["delivery"];
+    if (d.delivery !== undefined) {
+      const source = object(d.delivery);
+      delivery = {
+        accountId: str(source.accountId, "Gmail account", 320),
+        generationId: source.generationId as number,
+        gmailDraftId: str(source.gmailDraftId, "Gmail draft ID", 500),
+        snapshot: str(source.snapshot, "Gmail snapshot", 64),
+      };
+      if (
+        d.appId !== "gmail" ||
+        !delivery.accountId ||
+        !delivery.gmailDraftId ||
+        !Number.isSafeInteger(delivery.generationId) ||
+        delivery.generationId < 1 ||
+        !/^[a-f0-9]{64}$/.test(delivery.snapshot)
+      )
+        throw new Error("Invalid Gmail delivery metadata.");
+    }
     return {
       id,
       roleId,
+      delivery,
       appId: appId(d.appId),
       subject: str(d.subject, "subject", 1000),
       recipient: str(d.recipient, "recipient", 500),

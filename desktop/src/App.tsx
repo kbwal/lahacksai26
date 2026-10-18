@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   ArrowUpRightIcon as ArrowUpRight,
+  MagnifyingGlassIcon,
+  PaperPlaneTiltIcon,
+  ArrowClockwiseIcon,
+  XIcon,
   CheckIcon as Check,
   ClockIcon as Clock3,
   PenNibIcon as Feather,
@@ -17,6 +21,7 @@ import {
 import type { AppId, Draft, Page, Persona, Workspace } from "./types";
 import {
   allowedRoles,
+  searchDrafts,
   APP_LINKS,
   APP_NAMES,
   fillTime,
@@ -84,6 +89,143 @@ function Dashboard({ initial }: { initial: Workspace }) {
     [saved, setSaved] = useState(false),
     [notice, setNotice] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [mailBusy, setMailBusy] = useState(false),
+    [sendingId, setSendingId] = useState("");
+  const sendingRef = useRef(false);
+  const [uncertainIds, setUncertainIds] = useState<string[]>([]);
+  const [gmailAccounts, setGmailAccounts] = useState<string[]>([]);
+  const [gmailAccount, setGmailAccount] = useState(
+    initial.drafts.find((d) => d.delivery)?.delivery?.accountId || "",
+  );
+  async function refreshGmail() {
+    if (!window.margin || mailBusy) return;
+    if (
+      state.drafts.some((d) => d.appId === "gmail" && d.localChanges) &&
+      !window.confirm(
+        "Refresh Gmail drafts? Local edits to Gmail drafts will be replaced with their current Gmail versions.",
+      )
+    )
+      return;
+    setMailBusy(true);
+    try {
+      const accounts = await window.margin.gmailAccounts();
+      setGmailAccounts(accounts);
+      if (!accounts.length)
+        throw new Error(
+          "No connected Gmail account found. Use your existing Gmail worker connection in Settings.",
+        );
+      const account =
+        gmailAccount && accounts.includes(gmailAccount)
+          ? gmailAccount
+          : accounts.length === 1
+            ? accounts[0]
+            : "";
+      if (!account) {
+        setPage("settings");
+        setNotice("Choose a Gmail account, then load its drafts.");
+        return;
+      }
+      const result = await window.margin.gmailInbox(account);
+      const roles =
+        state.mode === "demo"
+          ? state.roles.map((r) => ({
+              ...r,
+              usableExamples: 0,
+              trainingReady: false,
+            }))
+          : state.roles;
+      const incoming = result.drafts.map((d) => ({
+        ...d,
+        roleId: roles.some((r) => r.id === d.roleId) ? d.roleId : roles[0].id,
+      }));
+      const next = parseWorkspace({
+        ...state,
+        mode: "local",
+        roles,
+        connections: state.connections.map((c) => ({
+          ...c,
+          connected: c.id === "gmail" || (state.mode !== "demo" && c.connected),
+        })),
+        drafts: [
+          ...(state.mode === "demo"
+            ? []
+            : state.drafts.filter((d) => d.appId !== "gmail")),
+          ...incoming,
+        ],
+      });
+      setState(next);
+      setGmailAccount(result.accountId);
+      selectApp("gmail");
+      setQuery("");
+      setNotice(
+        `Loaded ${incoming.length} Gmail ${incoming.length === 1 ? "draft" : "drafts"} for ${result.accountId}.`,
+      );
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setMailBusy(false);
+    }
+  }
+  async function chooseGmailConnection() {
+    if (!window.margin) return;
+    try {
+      const accounts = await window.margin.chooseGmailConnection();
+      if (accounts) {
+        setGmailAccounts(accounts);
+        setGmailAccount(accounts.length === 1 ? accounts[0] : "");
+        setNotice(
+          accounts.length
+            ? "Gmail connection selected. Load its drafts to review and send."
+            : "This connection has no Gmail accounts. Connect Gmail with the local worker first.",
+        );
+      }
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+  async function sendReply(draft: Draft) {
+    if (!window.margin || sendingRef.current) return;
+    sendingRef.current = true;
+    setSendingId(draft.id);
+    try {
+      await saveWorkspace(state);
+      const result = await window.margin.sendDraft(draft.id);
+      if (result.status === "sent") {
+        setState((s) => ({
+          ...s,
+          drafts: s.drafts.filter((d) => d.id !== draft.id),
+        }));
+        setNotice(result.message || `Reply sent to ${draft.recipient}.`);
+      } else if (result.status === "uncertain") {
+        setUncertainIds((ids) => [...ids, draft.id]);
+        setError(
+          result.message ||
+            "Delivery is unconfirmed. Check Gmail before taking further action.",
+        );
+      }
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      sendingRef.current = false;
+      setSendingId("");
+    }
+  }
+  function sendUnavailable(draft: Draft) {
+    if (!window.margin) return "Sending is available in the Mac app.";
+    if (draft.appId !== "gmail")
+      return `${APP_NAMES[draft.appId]} sending is not connected yet.`;
+    if (state.mode === "demo" || !draft.delivery)
+      return "Load drafts from your connected Gmail account to send replies.";
+    if (uncertainIds.includes(draft.id))
+      return "Check Gmail to confirm delivery. This draft will not be resent.";
+    if (placeholders(draft.body).length)
+      return "Fill every missing detail before sending.";
+    if (!state.connections.find((c) => c.id === draft.appId)?.connected)
+      return "Reconnect Gmail before sending.";
+    if (!draft.body.trim()) return "This draft is empty.";
+    return "";
+  }
   useEffect(() => {
     let active = true;
     setSaved(false);
@@ -101,7 +243,10 @@ function Dashboard({ initial }: { initial: Workspace }) {
       active = false;
     };
   }, [state]);
-  const drafts = state.drafts.filter((d) => app === "all" || d.appId === app);
+  const appDrafts = state.drafts.filter(
+    (d) => app === "all" || d.appId === app,
+  );
+  const drafts = searchDrafts(appDrafts, query, state.roles);
   const activeDraft = drafts.find((d) => d.id === draftId) || drafts[0];
   const connection = state.connections.find((c) => c.id === app);
   const activeRole = state.roles.find((r) => r.id === activeDraft?.roleId);
@@ -304,6 +449,36 @@ function Dashboard({ initial }: { initial: Workspace }) {
                   </button>
                 </div>
               </section>
+              <div className="inbox-toolbar">
+                <div className="inbox-search">
+                  <MagnifyingGlassIcon size={17} aria-hidden="true" />
+                  <input
+                    type="search"
+                    aria-label="Search inbox"
+                    placeholder="Search people, messages, roles…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                  {query && (
+                    <button
+                      className="ghost"
+                      aria-label="Clear search"
+                      onClick={() => setQuery("")}
+                    >
+                      <XIcon size={14} />
+                    </button>
+                  )}
+                </div>
+                {window.margin && (app === "gmail" || app === "all") && (
+                  <button
+                    disabled={mailBusy || !!sendingId}
+                    onClick={() => void refreshGmail()}
+                  >
+                    <ArrowClockwiseIcon size={15} />
+                    {mailBusy ? "Loading Gmail…" : "Refresh Gmail"}
+                  </button>
+                )}
+              </div>
               {activeDraft && activeRole ? (
                 <div className="draft-layout">
                   <section className="draft-list" aria-label="Current drafts">
@@ -439,14 +614,33 @@ function Dashboard({ initial }: { initial: Workspace }) {
                           <UsersRound size={14} />
                           {activeRole.name} voice
                         </span>
-                        <button
-                          className="primary"
-                          onClick={() => void investigate(activeDraft)}
-                        >
-                          Open in {APP_NAMES[activeDraft.appId]}
-                          <ArrowUpRight size={16} />
-                        </button>
+                        <div className="row draft-actions">
+                          <button onClick={() => void investigate(activeDraft)}>
+                            Open in {APP_NAMES[activeDraft.appId]}
+                            <ArrowUpRight size={16} />
+                          </button>
+                          <button
+                            className="primary"
+                            disabled={
+                              !!sendUnavailable(activeDraft) ||
+                              !!sendingId ||
+                              mailBusy
+                            }
+                            title={
+                              sendUnavailable(activeDraft) ||
+                              "Review and send this reply"
+                            }
+                            onClick={() => void sendReply(activeDraft)}
+                          >
+                            <PaperPlaneTiltIcon size={16} />
+                            {sendingId === activeDraft.id ? "Sending…" : "Send"}
+                          </button>
+                        </div>
                       </div>
+                      <p className="link-note">
+                        {sendUnavailable(activeDraft) ||
+                          "You’ll review the recipient and message before sending."}
+                      </p>
                       <p className="link-note">
                         {activeDraft.localChanges
                           ? "This edit is saved locally. Live app sync is not connected yet."
@@ -461,19 +655,27 @@ function Dashboard({ initial }: { initial: Workspace }) {
                 <section className="empty">
                   <Mail size={28} />
                   <h2>
-                    {connection && !connection.connected
-                      ? `Connect ${connection.name} to see your drafts.`
-                      : "You’re all caught up."}
+                    {query.trim()
+                      ? "No matching drafts."
+                      : connection && !connection.connected
+                        ? `Connect ${connection.name} to see your drafts.`
+                        : "You’re all caught up."}
                   </h2>
                   <p className="description">
-                    {connection && !connection.connected
-                      ? "All your roles are allowed by default. You can add exceptions in Edit your roles."
-                      : "Drafts for messages likely to need a reply will appear here. Manual drafting stays available in your apps."}
+                    {query.trim()
+                      ? `No drafts match “${query.trim()}” in ${app === "all" ? "All apps" : APP_NAMES[app]}. Try another person or phrase.`
+                      : connection && !connection.connected
+                        ? "All your roles are allowed by default. You can add exceptions in Edit your roles."
+                        : "Drafts for messages likely to need a reply will appear here. Manual drafting stays available in your apps."}
                   </p>
-                  <button onClick={() => setPage("settings")}>
-                    Manage connections
-                    <ChevronRight size={15} />
-                  </button>
+                  {query.trim() ? (
+                    <button onClick={() => setQuery("")}>Clear search</button>
+                  ) : (
+                    <button onClick={() => setPage("settings")}>
+                      Manage connections
+                      <ChevronRight size={15} />
+                    </button>
+                  )}
                 </section>
               )}
             </>
@@ -600,6 +802,45 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     ? "Sample connections don’t access real accounts."
                     : "Live account linking is handled by your local connector."}
                 </p>
+                {window.margin && (
+                  <section className="gmail-inbox-settings">
+                    <h2 className="section-title">Gmail inbox</h2>
+                    <p className="sub spaced">
+                      Load drafts from your existing Gmail connection to review
+                      and send them here.
+                    </p>
+                    {!!gmailAccounts.length && (
+                      <label className="field">
+                        Gmail account
+                        <select
+                          value={gmailAccount}
+                          onChange={(e) => setGmailAccount(e.target.value)}
+                        >
+                          <option value="">Choose an account</option>
+                          {gmailAccounts.map((account) => (
+                            <option key={account} value={account}>
+                              {account}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <div className="row spaced">
+                      <button
+                        disabled={mailBusy || !!sendingId}
+                        onClick={() => void refreshGmail()}
+                      >
+                        {mailBusy ? "Loading Gmail…" : "Load Gmail drafts"}
+                      </button>
+                      <button
+                        disabled={mailBusy || !!sendingId}
+                        onClick={() => void chooseGmailConnection()}
+                      >
+                        Use existing connection…
+                      </button>
+                    </div>
+                  </section>
+                )}
                 <h2 className="section-title">Drafting</h2>
                 <label className="option-row">
                   <span>

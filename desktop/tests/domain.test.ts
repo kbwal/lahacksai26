@@ -140,3 +140,34 @@ describe("external link boundary", () => {
     expect(nativePolicy.isAllowedExternalUrl(url)).toBe(false);
   });
 });
+
+describe("inbox search", () => {
+  it("matches words across people, text, context, apps and roles without case sensitivity", async () => {
+    const { searchDrafts } = await import("../src/lib/domain");
+    const w = sampleWorkspace();
+    expect(
+      searchDrafts(w.drafts, "  MAYA ui  ", w.roles).map((d) => d.id),
+    ).toEqual(["handoff"]);
+    expect(
+      searchDrafts(w.drafts, "gmail professional", w.roles).map((d) => d.id),
+    ).toEqual(["feedback"]);
+    expect(
+      searchDrafts(w.drafts, "professor.chen@university.example", w.roles),
+    ).toHaveLength(1);
+    expect(searchDrafts(w.drafts, "nonexistent", w.roles)).toEqual([]);
+    expect(searchDrafts(w.drafts, "   ", w.roles)).toHaveLength(5);
+  });
+  it("retains validated Gmail delivery metadata across saved snapshots", () => {
+    const w = sampleWorkspace();
+    w.mode = "local";
+    w.drafts[0].delivery = {
+      accountId: "me@example.com",
+      generationId: 1,
+      gmailDraftId: "d",
+      snapshot: "a".repeat(64),
+    };
+    expect(parseWorkspace(w).drafts[0].delivery).toEqual(w.drafts[0].delivery);
+    w.drafts[0].delivery.snapshot = "invalid";
+    expect(() => parseWorkspace(w)).toThrow("delivery metadata");
+  });
+});

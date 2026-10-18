@@ -24,6 +24,12 @@ export interface Draft {
   context: string;
   body: string;
   updatedAt: string;
+  delivery?: {
+    accountId: string;
+    generationId: number;
+    gmailDraftId: string;
+    snapshot: string;
+  };
   externalUrl?: string;
   localChanges?: boolean;
   timeEdit?: { template: string; choice: TimeChoice; rendered: string };
@@ -43,6 +49,17 @@ export interface TimeChoice {
 declare global {
   interface Window {
     margin?: {
+      gmailAccounts(): Promise<string[]>;
+      chooseGmailConnection(): Promise<string[] | null>;
+      gmailInbox(
+        account?: string,
+      ): Promise<{ accountId: string; drafts: Draft[] }>;
+      sendDraft(
+        id: string,
+      ): Promise<{
+        status: "sent" | "cancelled" | "uncertain";
+        message?: string;
+      }>;
       loadWorkspace(): Promise<unknown>;
       saveWorkspace(workspace: Workspace): Promise<void>;
       openExternal(url: string): Promise<void>;

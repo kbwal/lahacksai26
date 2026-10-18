@@ -25,21 +25,21 @@ The package command produces `release/Margin-darwin-arm64/Margin.app` on Apple S
 
 ## Implemented
 
-- Left navigation filters drafts by All apps, Gmail, Slack or Outlook.
+- Left navigation filters drafts by All apps, Gmail, Slack or Outlook, with consistent app colors. Inbox search matches people, addresses, message/context text, roles and app names within the selected app. Empty results have a clear-search action.
 - App headers show only the roles allowed for that app.
 - Roles are based on relationships, not platforms. Professional, Social and Academic are defaults.
 - New roles allow every app. Existing roles can opt out of individual apps.
 - Existing drafts remain visible after a role excludes their app.
 - Draft previews display the role, incoming context, text and unresolved placeholders.
 - `[TIME]` opens an accessible date/time dialog with quick choices and a sentence preview. It replaces all time placeholders in that local draft, preserving other placeholders. Filled times remain clickable and can be corrected after reopening the app.
-- Settings persist automatic-drafting and edit-learning preferences. Preferences are not sent to a backend yet.
+- Settings persist automatic drafting. The older edit-learning field remains in snapshot version 1 for compatibility; its control has been removed.
 - Roles, preferences and local draft changes persist across restarts. Native files are saved atomically, with the previous file retained as `workspace.json.bak`.
 - Draft buttons open supplied official app URLs, or the app's drafts/home page when no exact link exists.
 - JSON snapshots can be imported in Settings with structural validation and an explicit replacement confirmation.
 
 ## Integration handoff
 
-The Python training modules are intentionally unchanged. There is no Gmail/Slack OAuth or inference server in this change. The UI starts with a **Sample workspace** label; its connection controls only toggle sample state. Imported workspaces use **Local workspace** and account controls are connector-managed.
+The `infra` branch Gmail worker is included. Training modules are unchanged. Gmail uses the native worker and macOS Keychain; no HTTP server or renderer tokens are needed. Slack and Outlook sending are not implemented. The UI starts with a **Sample workspace** label; its connection controls only toggle sample state. Imported workspaces use **Local workspace** and account controls are connector-managed.
 
 The shared contract is [`src/types.ts`](src/types.ts). Import [`examples/sample-workspace.json`](examples/sample-workspace.json) through Settings to exercise the boundary. The service should supply:
 
@@ -64,11 +64,11 @@ interface Workspace {
 
 All three connection records must be present, including disconnected integrations. IDs must be unique; each draft must refer to a known role. Inputs are bounded to 30 roles, 500 drafts, and a 10 MB file. Official Gmail, Slack and Outlook HTTPS links are allowed; other URLs are rejected in the renderer and native shell.
 
-`src/lib/storage.ts` is the persistence adapter boundary. Replace or extend it with the local service client once the infra endpoints are agreed. Send role/preference mutations to the service at that boundary and send edited draft text through the original app's draft-update integration. Until then, time edits explicitly say **Updated locally** and do not modify Gmail or Slack.
+`src/lib/storage.ts` remains the local workspace persistence boundary. Native Gmail IPC invokes the infra sidecar for account discovery, current drafts and explicit sends. Role/preferences are still local. Time edits say **Updated locally** until sent: sending includes them in the outgoing text, while opening the original app shows the version saved there. Slack draft updates and sending still need their connector.
 
 The fine-tuned model decides whether a message needs a reply. Only include resulting auto-drafts in the snapshot; manual drafting can create the same `Draft` record. The UI does not infer readiness from an arbitrary sample-count threshold: the training service provides `trainingReady` after filtering and quality checks. Three short messages must not become a trained persona just because a user created a role.
 
-For automatic drafting, an integration should honor both the connected account and the role's exclusion policy. Changing policy does not erase previously trained information; retraining is needed for that. Gmail/Slack send guards remain the extension/server's responsibility. The dashboard recognizes arbitrary uppercase bracketed tokens, including model-invented types, and never sends messages.
+For automatic drafting, an integration should honor both the connected account and the role's exclusion policy. Changing policy does not erase previously trained information; retraining is needed for that. Gmail/Slack send guards remain the extension/server's responsibility. The dashboard recognizes arbitrary uppercase bracketed tokens, including model-invented types, and blocks sending until every placeholder is filled.
 
 ## Storage and native boundary
 
@@ -81,3 +81,15 @@ The native shell uses context isolation, renderer sandboxing, disabled Node inte
 `Draft.timeEdit` keeps `{ template, choice: { date, time }, rendered }` so a locally inserted time can be changed without replacing unrelated times in the message. Snapshot validation checks it against `body`. If an integration changes the body, it must remove or regenerate this metadata. Older snapshots without it remain supported.
 
 Role forms reject blank names/descriptions and duplicate names (ignoring case and surrounding spaces). Modal dialogs focus the relevant input when opened.
+
+## Inbox search and Gmail sending
+
+Build the sidecar before packaging the Electron app. The package command embeds the complete `dist/lahacks-mail-worker` directory as a resource, including its interpreter and libraries. See `DESKTOP_PACKAGING.md` for the locked sidecar build. Development uses `build/macos-venv/bin/python` with a fixed entrypoint; there is no shell interpolation.
+
+In Settings, choose **Use existing connection…** and select the `mail.db` used by the infra worker. Then **Load Gmail drafts**, selecting an account if multiple are connected. The default bundled data home is the infra worker's Application Support directory; `MARGIN_MAIL_DB` can supply an absolute existing database path. Existing OAuth credentials remain in Keychain. No sample drafts can be sent. Loading real Gmail data replaces sample drafts and clears sample training-readiness claims.
+
+Only app-owned, published Gmail drafts are listed for sending. **Send** opens a native review showing the sender, recipient, subject and full body. Cancel makes no provider call. After approval the worker refetches the Gmail draft and rejects a changed snapshot or different account/thread. It sends the reviewed local text using [Gmail's native draft send API](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/send), preserving reply headers. Attachments, Cc/Bcc and ambiguous recipients must be handled in Gmail. Time edits in Margin are included in the outgoing text.
+
+A durable SQLite journal claims each draft before the provider call. Sends are never automatically retried; timeout, server error or incomplete acknowledgement remains uncertain and blocks replay even after restarting the app. A definitive rejecting response permits a later explicit retry. The UI removes a draft only after Gmail acknowledges delivery. Successful sends record the final text for infra's existing feedback pipeline. Scheduled generation continues to create drafts only and never calls the desktop send path.
+
+Tests use fake Gmail clients and isolated databases; they do not read credentials or send real mail. Live OAuth/send testing requires an explicitly reviewed real message. Browser preview and sample data show the send control disabled; use the Mac app with an existing Gmail connection for delivery.

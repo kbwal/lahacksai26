@@ -990,3 +990,68 @@ input[type="checkbox"] {
     transition: none !important;
   }
 }
+
+.inbox-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.inbox-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  color: var(--sub);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 10px;
+  background: var(--surface);
+}
+.inbox-search:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.inbox-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.inbox-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.inbox-search button {
+  padding: 4px;
+}
+.draft-actions {
+  gap: 8px;
+}
+.field select {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font: inherit;
+}
+@media (max-width: 600px) {
+  .inbox-toolbar {
+    flex-wrap: wrap;
+    padding: 12px 20px;
+  }
+  .inbox-search {
+    flex-basis: 100%;
+  }
+}
