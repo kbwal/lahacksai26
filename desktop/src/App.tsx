@@ -10,7 +10,6 @@ import {
   HardDriveIcon as HardDrive,
   EnvelopeSimpleIcon as Mail,
   PencilSimpleIcon as Pencil,
-  PlusIcon as Plus,
   GearSixIcon as Settings,
   UsersThreeIcon as UsersRound,
   UploadSimpleIcon as Upload,
@@ -329,10 +328,6 @@ function Dashboard({ initial }: { initial: Workspace }) {
           <span className="workspace-mode">
             {state.mode === "demo" ? "Sample workspace" : "Local workspace"}
           </span>
-          <button className="top-settings" onClick={() => setPage("settings")}>
-            <Settings size={16} />
-            Settings
-          </button>
           <span className="local-status">
             <HardDrive size={15} />
             On your Mac
@@ -388,6 +383,14 @@ function Dashboard({ initial }: { initial: Workspace }) {
             ))}
           </nav>
           <div className="sidebar-bottom">
+            <button
+              className="side-action"
+              aria-pressed={page === "settings"}
+              onClick={() => setPage("settings")}
+            >
+              <Settings size={17} />
+              Settings
+            </button>
             <button
               className="side-action"
               aria-pressed={page === "roles"}
@@ -501,7 +504,7 @@ function Dashboard({ initial }: { initial: Workspace }) {
                         <button
                           key={d.id}
                           className="draft-item"
-                          data-app={app === "all" ? d.appId : undefined}
+                          data-app={d.appId}
                           aria-pressed={activeDraft.id === d.id}
                           onClick={() => setDraftId(d.id)}
                         >
@@ -698,14 +701,6 @@ function Dashboard({ initial }: { initial: Workspace }) {
                     <p className="overline">Personalization</p>
                     <h1>Edit your roles</h1>
                   </div>
-                  <button
-                    className="primary"
-                    onClick={() => setRoleEditor("new")}
-                    disabled={state.roles.length >= 30}
-                  >
-                    <Plus size={16} />
-                    Add role
-                  </button>
                 </div>
                 <p className="description">
                   Give each part of your life its own voice. Every role uses all
