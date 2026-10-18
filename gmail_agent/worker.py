@@ -6,7 +6,7 @@ import signal
 import threading
 import time
 
-from gmail_agent.locking import process_lock
+from gmail_agent.locking import worker_lock
 from gmail_agent.replies import process_pending
 from gmail_agent.sync import sync_mailbox
 
@@ -23,6 +23,8 @@ def run_cycle(store, client, account_id, generator, *, limit=20):
         with store.db:
             store.finish_cycle(account_id, error)
         raise
+    finally:
+        generator.close()
     with store.db:
         store.finish_cycle(account_id)
     return result
@@ -42,7 +44,7 @@ def run_forever(store, client, account_id, generator, *, interval=1800, limit=20
 
 
 def run_locked(store, client, account_id, generator, *, once=False, interval=1800, limit=20):
-    with process_lock(store.path.with_suffix(".worker.lock")):
+    with worker_lock(store.path, account_id):
         try:
             if once:
                 return run_cycle(store, client, account_id, generator, limit=limit)

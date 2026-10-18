@@ -1,29 +1,33 @@
 import plistlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from gmail_agent import service
 from gmail_agent.__main__ import main, parser
-from gmail_agent.locking import AlreadyRunning, process_lock
+from gmail_agent.locking import AlreadyRunning, process_lock, worker_lock
 
 
 @pytest.fixture
 def launchd(tmp_path, monkeypatch):
-    target = tmp_path / "LaunchAgents" / f"{service.LABEL}.plist"
-    monkeypatch.setattr(service, "agent_path", lambda: target)
-    monkeypatch.setattr(service, "log_path", lambda: tmp_path / "Logs" / "gmail-worker.log")
+    monkeypatch.setattr(
+        service, "agent_path", lambda label: tmp_path / "LaunchAgents" / f"{label}.plist"
+    )
+    monkeypatch.setattr(service, "log_path", lambda label: tmp_path / "Logs" / f"{label}.log")
+    target = service.agent_path(service.job_label("me@example.com"))
     monkeypatch.setattr(service.sys, "platform", "darwin")
-    state = {"loaded": False, "calls": []}
+    state = {"loaded": set(), "calls": []}
 
     def run(*args):
         state["calls"].append(args)
         if args[0] == "bootstrap":
-            assert target.is_file()
-            state["loaded"] = True
+            target = Path(args[2])
+            config = plistlib.loads(target.read_bytes())
+            state["loaded"].add(config["Label"])
         elif args[0] == "bootout":
-            state["loaded"] = False
-        elif not state["loaded"]:
+            state["loaded"].remove(args[1].split("/")[-1])
+        elif args[1].split("/")[-1] not in state["loaded"]:
             return SimpleNamespace(returncode=113, stdout="", stderr="Could not find service")
         return SimpleNamespace(returncode=0, stdout="state = running\n pid = 42\n", stderr="")
 
@@ -38,6 +42,7 @@ def launchd(tmp_path, monkeypatch):
 
 def test_install_starts_private_login_job_with_absolute_arguments(launchd):
     target, state, args = launchd
+    args.adapter_name = "professional"
     result = service.install(args, "me@example.com")
     assert result["loaded"] and result["installed"]
     config = plistlib.loads(target.read_bytes())
@@ -46,6 +51,7 @@ def test_install_starts_private_login_job_with_absolute_arguments(launchd):
     assert command[command.index("--db") + 1] == str(args.db.resolve())
     assert command[command.index("--model") + 1] == str(args.model.resolve())
     assert command[command.index("--interval") + 1] == "1800"
+    assert command[command.index("--adapter-name") + 1] == "professional"
     assert config["RunAtLoad"] and config["KeepAlive"]
     assert config["EnvironmentVariables"]["HF_HUB_OFFLINE"] == "1"
     assert config["EnvironmentVariables"]["PYTHONPATH"]
@@ -97,8 +103,57 @@ def test_existing_service_is_not_overwritten(launchd):
     service.install(args, "me@example.com")
     original = target.read_bytes()
     with pytest.raises(ValueError, match="already exists"):
-        service.install(args, "other@example.com")
+        service.install(args, "ME@example.com")
     assert target.read_bytes() == original
+
+
+def test_accounts_have_independent_services_and_controls(launchd):
+    target, state, args = launchd
+    first = service.install(args, "me@example.com")
+    # A running worker in the same DB must not block another account's service.
+    with worker_lock(args.db, "me@example.com"):
+        second = service.install(args, "other@example.com")
+    assert first["label"] != second["label"]
+    assert first["log"] != second["log"]
+    assert len(state["loaded"]) == 2
+    with pytest.raises(ValueError, match="--account"):
+        service.status()
+    assert not service.stop("me@example.com")["loaded"]
+    assert service.status("other@example.com")["loaded"]
+    assert service.start("me@example.com")["loaded"]
+    assert not service.uninstall("other@example.com")["installed"]
+    assert target.exists()
+    assert service.status()["loaded"]
+
+
+def test_legacy_service_remains_controllable_by_account(launchd):
+    _, state, args = launchd
+    target = service.agent_path(service.LABEL)
+    target.parent.mkdir(parents=True)
+    target.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": service.LABEL,
+                "ProgramArguments": ["python", "--account", "me@example.com", "run"],
+                "StandardOutPath": "/legacy/log",
+            }
+        )
+    )
+    state["loaded"].add(service.LABEL)
+    assert service.status("me@example.com")["label"] == service.LABEL
+    with pytest.raises(ValueError, match="already exists"):
+        service.install(args, "me@example.com")
+    assert not service.uninstall("me@example.com")["installed"]
+    assert not state["loaded"]
+
+
+def test_cli_targets_only_requested_service(launchd, capsys):
+    _, _, args = launchd
+    service.install(args, "me@example.com")
+    service.install(args, "other@example.com")
+    assert main(["--account", "other@example.com", "service", "stop"]) == 0
+    assert '"loaded": false' in capsys.readouterr().out
+    assert service.status("me@example.com")["loaded"]
 
 
 def test_unknown_launchctl_failure_is_not_reported_as_missing(launchd, monkeypatch):

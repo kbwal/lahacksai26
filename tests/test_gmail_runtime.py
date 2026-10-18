@@ -34,6 +34,21 @@ def test_app_can_select_an_isolated_home_and_override_individual_paths(tmp_path,
     assert error.value.code == 2
 
 
+def test_development_and_frozen_processes_share_default_model_lock(tmp_path, monkeypatch):
+    from gmail_agent.replies import LocalGenerator
+
+    monkeypatch.delenv("LAHACKS_MAIL_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
+    monkeypatch.chdir(tmp_path)
+    development = parser().parse_args(["run"])
+    assert LocalGenerator("model").model_lock == development.model_lock
+    monkeypatch.setattr(runtime.sys, "frozen", True)
+    monkeypatch.chdir("/tmp")
+    bundled = parser().parse_args(["run"])
+    assert development.model_lock == bundled.model_lock
+
+
 def test_info_is_json_and_never_opens_a_database_or_keychain(tmp_path, monkeypatch, capsys):
     home = tmp_path / "not created"
     monkeypatch.setenv("LAHACKS_MAIL_HOME", str(home))

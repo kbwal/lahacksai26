@@ -9,7 +9,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from gmail_agent import runtime
-from gmail_agent.locking import AlreadyRunning, process_lock
+from gmail_agent.locking import AlreadyRunning, process_lock, worker_lock
 from gmail_agent.store import Store
 
 
@@ -24,6 +24,9 @@ def worker_options(command, *, scheduled=False):
     paths = runtime.default_paths()
     command.add_argument("--model", type=Path, default=paths["model"])
     command.add_argument("--adapter-path", type=Path)
+    command.add_argument(
+        "--adapter-name", help="Training persona; defaults to adapter directory name"
+    )
     command.add_argument("--arm", choices=("base", "instruct"), default="instruct")
     command.add_argument("--max-tokens", type=positive, default=300)
     command.add_argument("--draft-limit", type=positive, default=20)
@@ -112,7 +115,7 @@ def recover(store, client, account_id, args):
         raise ValueError("No such draft for this account")
     if row["state"] not in {"publishing", "published", "failed"}:
         raise ValueError("Only uncertain, published or failed records need recovery")
-    _refresh(store, client, account_id, row["thread_id"])
+    _refresh(store, client, account_id, row["thread_id"], refresh_drafts=True)
     with store.db:
         reconcile(store, account_id)
     row = store.draft(args.draft_id)
@@ -170,7 +173,7 @@ def main(argv=None):
         if args.command == "service" and args.service_command != "install":
             from gmail_agent import service
 
-            result = getattr(service, args.service_command)()
+            result = getattr(service, args.service_command)(args.account)
             print(json.dumps(result, indent=2))
             return 0
         store = Store(args.db)
@@ -207,7 +210,7 @@ def main(argv=None):
         if args.command == "disconnect":
             from gmail_agent.auth import disconnect
 
-            with process_lock(store.path.with_suffix(".worker.lock")):
+            with worker_lock(store.path, account_id):
                 disconnect(store.account(account_id)["credential_ref"])
             print(json.dumps({"disconnected": True, "local_history_retained": True}))
             return 0
@@ -215,7 +218,7 @@ def main(argv=None):
 
         client = client_for(store.account(account_id)["credential_ref"])
         if args.command in {"backfill", "recover"}:
-            with process_lock(store.path.with_suffix(".worker.lock")):
+            with worker_lock(store.path, account_id):
                 if args.command == "backfill":
                     from gmail_agent.sync import backfill
 
@@ -237,6 +240,7 @@ def main(argv=None):
         generator = LocalGenerator(
             args.model,
             adapter_path=args.adapter_path,
+            adapter_name=args.adapter_name,
             arm=args.arm,
             max_tokens=args.max_tokens,
             model_lock=args.model_lock,

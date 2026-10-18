@@ -5,6 +5,9 @@ import sqlite3
 import time
 from pathlib import Path
 
+from gmail_agent.text import comparable_body
+from gmail_agent.training import conversation_messages
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
     account_id TEXT PRIMARY KEY,
@@ -297,13 +300,35 @@ class Store:
             (account_id,),
         )
         for row in rows:
+            context = json.loads(row["context"])
+            conversation = context.get("conversation")
+            if conversation is None:
+                # Older records saved message IDs and a flattened Pair prompt.
+                # Rebuild roles using only those IDs, never later thread turns.
+                messages = []
+                for message_id in context["message_ids"][-3:]:
+                    message = self.db.execute(
+                        "SELECT * FROM messages WHERE account_id=? AND message_id=?",
+                        (account_id, message_id),
+                    ).fetchone()
+                    if message is None:
+                        raise ValueError("Cannot reconstruct the saved feedback conversation")
+                    messages.append(self.decode_message(message))
+                conversation = conversation_messages(messages, account_id)
+            generated = comparable_body(row["generated_text"])
+            final = comparable_body(row["final_text"])
             yield {
+                "adapter_name": context.get("adapter_name", "default"),
+                "conversation": conversation,
+                "draft": generated,
+                "final": final,
+                "type": "train",
                 "account_id": account_id,
                 "thread_id": row["thread_id"],
-                "context": json.loads(row["context"]),
+                "context": context,
                 "generated_text": row["generated_text"],
                 "final_text": row["final_text"],
                 "sent_message_id": row["sent_message_id"],
                 "model_version": row["model_version"],
-                "changed": row["generated_text"].strip() != row["final_text"].strip(),
+                "changed": generated != final,
             }

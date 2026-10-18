@@ -9,7 +9,7 @@ import pytest
 
 from gmail_agent.__main__ import recover
 from gmail_agent.client import GmailError, PublishUncertain
-from gmail_agent.locking import AlreadyRunning, process_lock
+from gmail_agent.locking import AlreadyRunning, process_lock, worker_lock
 from gmail_agent.store import Store
 from gmail_agent.sync import backfill, sync_mailbox
 from gmail_agent.worker import run_cycle, run_forever
@@ -45,6 +45,8 @@ class FakeGmail:
         self.expired_cursor = None
         self.pages = None
         self.page_reads = []
+        self.draft_list_reads = 0
+        self.thread_reads = []
         for item in messages:
             self.add(item)
 
@@ -76,6 +78,7 @@ class FakeGmail:
         }
 
     def get_thread(self, thread_id):
+        self.thread_reads.append(thread_id)
         if self.read_error:
             raise self.read_error
         return sorted(
@@ -84,6 +87,7 @@ class FakeGmail:
         )
 
     def list_drafts(self):
+        self.draft_list_reads += 1
         return [
             {"id": did, "message": {"id": item["id"], "threadId": item["thread_id"]}}
             for did, item in self.drafts.items()
@@ -127,11 +131,14 @@ class FakeGmail:
 
 class Generator:
     version = "test-model:test-adapter"
+    adapter_name = "test-adapter"
 
     def __init__(self):
         self.calls = []
         self.fail = False
         self.on_generate = None
+        self.text = "[DATE] works for me."
+        self.closes = 0
 
     def generate(self, context):
         self.calls.append(context)
@@ -139,7 +146,10 @@ class Generator:
             self.on_generate()
         if self.fail:
             raise RuntimeError("simulated model failure")
-        return "[DATE] works for me."
+        return self.text
+
+    def close(self):
+        self.closes += 1
 
 
 @pytest.fixture
@@ -555,3 +565,213 @@ def test_manual_dismiss_keeps_remote_draft(setup):
     run_cycle(store, client, account, generator)
     assert "draft-1" in client.drafts
     assert len(client.creates) == 1
+
+
+def test_uncertain_publication_recovers_multiline_smtp_body(setup):
+    store, account, generator = setup
+    generator.text = "Hi,\n\nSounds good.\nThanks"
+    client = FakeGmail([message()])
+    client.lose_response = True
+    run_cycle(store, client, account, generator)
+    assert client.drafts["draft-1"]["body_text"] == "Hi,\r\n\r\nSounds good.\r\nThanks\r\n"
+    client.lose_response = False
+    run_cycle(store, client, account, generator)
+    assert store.draft(1)["state"] == "published"
+    assert len(client.creates) == 1
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_multiline_feedback_ignores_only_transport_line_endings(setup, edited):
+    store, account, generator = setup
+    generator.text = "Hi,\n\nSounds good.\nThanks"
+    client = FakeGmail([message()])
+    run_cycle(store, client, account, generator)
+    body = client.drafts["draft-1"]["body_text"]
+    if edited:
+        body = body.replace("Sounds good.", "Sounds  good.")
+    client.send("draft-1", body=body)
+    run_cycle(store, client, account, generator)
+    feedback = next(store.feedback(account))
+    assert feedback["changed"] is edited
+    assert (feedback["draft"] != feedback["final"]) is edited
+    assert "\r" not in feedback["final"]
+    assert feedback["final_text"] == body
+
+
+def test_separate_sent_reply_does_not_become_feedback_for_surviving_draft(setup):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    run_cycle(store, client, account, generator)
+    original = copy.deepcopy(client.drafts["draft-1"])
+    client.add(message("phone-reply", timestamp=1300, labels=["SENT"]))
+    run_cycle(store, client, account, generator)
+    assert store.draft(1)["state"] == "superseded"
+    assert not list(store.feedback(account))
+    assert client.drafts["draft-1"] == original
+    # Removing the old draft later must not retroactively pair the phone reply.
+    client.discard("draft-1")
+    run_cycle(store, client, account, generator)
+    assert not list(store.feedback(account))
+    client.add(message("new-turn", timestamp=1400))
+    run_cycle(store, client, account, generator)
+    assert len(client.creates) == 2
+
+
+def test_unconfirmed_publication_is_not_assumed_sent(setup):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    client.lose_response = True
+    run_cycle(store, client, account, generator)
+    client.send("draft-1")
+    run_cycle(store, client, account, generator)
+    assert store.draft(1)["state"] == "superseded"
+    assert not list(store.feedback(account))
+
+
+def test_send_between_draft_listing_and_thread_fetch_waits_for_next_index(setup, monkeypatch):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    run_cycle(store, client, account, generator)
+    original = client.list_drafts
+
+    def list_then_send():
+        drafts = original()
+        client.send("draft-1")
+        return drafts
+
+    with monkeypatch.context() as patch:
+        patch.setattr(client, "list_drafts", list_then_send)
+        run_cycle(store, client, account, generator)
+    assert store.draft(1)["state"] == "published"
+    assert not list(store.feedback(account))
+    run_cycle(store, client, account, generator)
+    assert store.draft(1)["state"] == "sent"
+    assert len(list(store.feedback(account))) == 1
+    assert len(client.creates) == 1
+
+
+def test_one_draft_listing_per_cycle_with_multiple_queued_threads(setup):
+    store, account, generator = setup
+    client = FakeGmail([message(str(n), str(n)) for n in range(20)])
+    assert run_cycle(store, client, account, generator)["published"] == 20
+    assert client.draft_list_reads == 1
+
+
+def test_unchanged_human_drafts_are_not_refetched_but_changed_sets_are(setup):
+    store, account, _ = setup
+    client = FakeGmail()
+    human = message("human", timestamp=300, labels=["DRAFT"])
+    client.add(human)
+    client.drafts["human"] = human
+    sync_mailbox(store, client, account)
+    client.thread_reads.clear()
+    sync_mailbox(store, client, account)
+    assert not client.thread_reads
+    # Draft index changes must be caught even before the history event arrives.
+    del client.drafts["human"]
+    client.threads["thread-1"] = []
+    sync_mailbox(store, client, account)
+    assert client.thread_reads == ["thread-1"]
+    client.thread_reads.clear()
+    client.drafts["replacement"] = human
+    client.threads["thread-1"] = [human]
+    sync_mailbox(store, client, account)
+    assert client.thread_reads == ["thread-1"]
+
+
+def test_cycle_releases_generator_on_success_and_sync_failure(setup):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    run_cycle(store, client, account, generator)
+    assert generator.closes == 1
+    client.read_error = GmailError(503, "read")
+    with pytest.raises(GmailError):
+        run_cycle(store, client, account, generator)
+    assert generator.closes == 2
+
+
+def test_busy_model_defers_generation_without_exhausting_retries(setup, monkeypatch):
+    store, account, generator = setup
+    client = FakeGmail([message()])
+
+    def busy(_):
+        raise AlreadyRunning("held by training")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(generator, "generate", busy)
+        for _ in range(4):
+            run_cycle(store, client, account, generator)
+        assert store.draft(1)["state"] == "queued"
+        assert store.draft(1)["attempts"] == 0
+    run_cycle(store, client, account, generator)
+    assert len(client.creates) == 1
+
+
+def test_worker_locks_isolate_accounts_and_respect_legacy_workers(tmp_path):
+    db = tmp_path / "mail.db"
+    with worker_lock(db, "me@example.com"):
+        with worker_lock(db, "other@example.com"):
+            pass
+        with pytest.raises(AlreadyRunning), worker_lock(db, "ME@example.com"):
+            pass
+        with pytest.raises(AlreadyRunning), process_lock(db.with_suffix(".worker.lock")):
+            pass
+    with (
+        process_lock(db.with_suffix(".worker.lock")),
+        pytest.raises(AlreadyRunning),
+        worker_lock(db, "me@example.com"),
+    ):
+        pass
+
+
+def test_feedback_exports_training_edit_with_exact_saved_context(setup):
+    from train import format as training_format
+
+    store, account, generator = setup
+    client = FakeGmail(
+        [
+            message("old", timestamp=50),
+            message("earlier", timestamp=100),
+            message("mine", timestamp=120, labels=["SENT"], body="My earlier reply"),
+            message("latest", timestamp=200),
+        ]
+    )
+    run_cycle(store, client, account, generator)
+    saved = generator.calls[0]["conversation"]
+    assert [m["from"] for m in saved] == ["them", "me", "them"]
+    assert saved[1]["text"] == "My earlier reply"
+    client.send("draft-1")
+    client.add(message("later-incoming", timestamp=1400))
+    run_cycle(store, client, account, generator)
+    feedback = next(store.feedback(account))
+    assert feedback["adapter_name"] == generator.adapter_name
+    assert feedback["conversation"] == saved
+    assert feedback["draft"] == "[DATE] works for me."
+    assert feedback["final"] == "Tomorrow works for me."
+    assert feedback["type"] == "train"
+    if hasattr(training_format, "Edit"):
+        edit = training_format.Edit.from_dict(feedback)
+        assert edit.adapter_name == generator.adapter_name
+        assert [m.sender for m in edit.context.messages] == ["them", "me", "them"]
+        assert edit.draft == feedback["draft"]
+        assert edit.final == feedback["final"]
+
+
+def test_legacy_feedback_reconstructs_only_saved_message_ids(setup):
+    import json
+
+    store, account, generator = setup
+    client = FakeGmail([message()])
+    run_cycle(store, client, account, generator)
+    # Simulate a published record created before structured contexts were added.
+    context = json.loads(store.draft(1)["context"])
+    del context["conversation"]
+    del context["adapter_name"]
+    with store.db:
+        store.set_state(1, "published", context=json.dumps(context))
+    client.send("draft-1")
+    client.add(message("new-incoming", timestamp=1400, body="A different question"))
+    run_cycle(store, client, account, generator)
+    feedback = next(store.feedback(account))
+    assert feedback["adapter_name"] == "default"
+    assert feedback["conversation"] == [{"from": "them", "text": "Can we meet?"}]

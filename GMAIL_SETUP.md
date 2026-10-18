@@ -53,9 +53,9 @@ Initial imports may pause for Gmail quota backoff. The client retries quota-spec
 .venv/bin/python -m gmail_agent status
 ```
 
-`service install` starts the worker now and registers `com.lahacksai26.gmail-worker` under `~/Library/LaunchAgents`. It starts at login, restarts after process exit, and performs an immediate catch-up cycle followed by cycles every 1,800 seconds. The Mac must be awake and the user logged in; sleep or network loss delays processing until it can catch up. Logs are at `~/Library/Logs/lahacksai26/gmail-worker.log`; the plist and log are private to your user and contain no OAuth tokens.
+`service install` starts the worker now and registers `com.lahacksai26.gmail-worker.<account-hash>` under `~/Library/LaunchAgents`. It starts at login, restarts after process exit, and performs an immediate catch-up cycle followed by cycles every 1,800 seconds. The Mac must be awake and the user logged in; sleep or network loss delays processing until it can catch up. Each account has its own log under `~/Library/Logs/lahacksai26/`, named after its service label; `service status` reports the exact path; the plist and log are private to your user and contain no OAuth tokens.
 
-Use `service stop` to stop it until the next login, `service start` to resume, and `service uninstall` to stop it and remove automatic startup. Uninstalling retains mail, model files and Keychain credentials. The CLI supports one managed login service per macOS user. Keep the checkout and virtual environment at their installed paths; uninstall and reinstall the service after moving them or changing its model/adapter options.
+Use `service stop` to stop it until the next login, `service start` to resume, and `service uninstall` to stop it and remove automatic startup. Uninstalling retains mail, model files and Keychain credentials. Install a separate managed login service for each connected account by passing `--account you@example.com` before `service install`. With multiple installed services, use `--account` for start, stop, status, and uninstall too. Existing single-label services remain controllable; uninstall and reinstall them to adopt the new label and default model-lock path. Keep the checkout and virtual environment at their installed paths; uninstall and reinstall the service after moving them or changing its model/adapter options.
 
 For an immediate manual cycle or a foreground process:
 
@@ -77,9 +77,11 @@ The default is the downloaded instruct model, with no personalized adapter. To u
 .venv/bin/python -m gmail_agent service install --adapter-path /absolute/path/to/instruct-adapter
 ```
 
-For the base arm, pass `--model models/Qwen3.5-2B-Base --arm base` and its matching adapter. Stop the service before training or replacing an adapter, then start it to load the new weights. The worker and training entrypoints share `data/model.lock` to prevent simultaneous model use.
+The persona name defaults to the adapter directory name (or `default` with no adapter). Use `--adapter-name social` to override it, including during `service install`; the name is saved with each generation for training feedback.
 
-With multiple connected accounts, put `--account you@example.com` before the subcommand. The worker lock covers the database, so run accounts sequentially with `once` or use separate databases for separate continuous workers. Global `--db` also precedes the subcommand.
+For the base arm, pass `--model models/Qwen3.5-2B-Base --arm base` and its matching adapter. The worker releases its model and lock after each cycle, so training can run during idle periods; the next generation loads the updated weights. Worker and training commands default to `~/Library/Application Support/lahacksai26/data/model.lock`, even in development. `LAHACKS_MAIL_HOME` selects an isolated data home and lock; use the same environment or explicit `--model-lock /absolute/path` in every cooperating process. Training fails safely while another process owns the lock; worker generation defers without consuming retries. Hold that lock or stop the workers before manually replacing model/adapter files.
+
+With multiple connected accounts, put `--account you@example.com` before the subcommand. Worker locks are per account, so independent continuous workers can share the database. They share a model lock to prevent simultaneous Metal model use. Stop all workers sharing the database before OAuth reconnect; other manual account operations require stopping only that account’s worker. Global `--db` also precedes the subcommand.
 
 ## 4. Verify in Gmail
 
@@ -98,6 +100,8 @@ Stop the service before this manual exercise and start it afterward.
 The export includes private, unmasked email text and never overwrites an existing file. It is input for the planned cleaning/training pipeline, not a ready-to-train dataset. Thread correspondence intentionally does not prove that a sent reply came from the exact generated draft.
 
 ## Recovery and status
+
+`export-feedback` JSONL is directly readable by `train.format.Edit.from_dict` on the training branch. It includes `adapter_name`, the saved `conversation` with `me`/`them` turns, normalized `draft`/`final`, and `type: "train"`, plus the original audit fields. Legacy records reconstruct their context from saved message IDs and use the persona `default` because older records did not save a persona name. Review that label before combining old feedback with a named persona.
 
 `status` works without OAuth and shows sync progress, draft counts, local draft IDs with errors, and `worker` health. Timestamps are Unix time in milliseconds. The health record distinguishes a running cycle, an idle worker after a completed cycle, and a failed cycle; it stores the error class without private exception text. `service status` independently reports whether launchd has a running process. Use both: a saved cycle state cannot prove the process is still alive. Model failures retain queued work; three failed generation attempts mark that turn `failed`. A later cycle retries transient sync failures from the saved cursor.
 

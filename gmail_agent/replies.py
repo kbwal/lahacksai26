@@ -1,7 +1,9 @@
 """Select reply turns, publish native drafts, and map human replies by thread."""
 
+import gc
 import hashlib
 import json
+import re
 from contextlib import ExitStack
 from email.utils import parseaddr
 from pathlib import Path
@@ -13,8 +15,11 @@ from gmail_agent.client import (
     reply_raw,
     reply_recipient,
 )
-from gmail_agent.locking import process_lock
+from gmail_agent.locking import AlreadyRunning, process_lock
+from gmail_agent.runtime import default_paths
 from gmail_agent.store import now_ms
+from gmail_agent.text import comparable_body
+from gmail_agent.training import conversation_messages, generation_input
 
 
 def candidate(store, account_id, thread_id):
@@ -41,7 +46,7 @@ def candidate(store, account_id, thread_id):
     return latest, messages
 
 
-def context_for(trigger, messages):
+def context_for(trigger, messages, account_email):
     # Include the incoming message being answered. Preserve this exact context for feedback.
     text = "\n\n".join(
         f"From: {m['headers'].get('from', '')}\n"
@@ -54,6 +59,7 @@ def context_for(trigger, messages):
         "relationship": "unknown",
         "thread": text,
         "message_ids": [m["id"] for m in messages],
+        "conversation": conversation_messages(messages, account_email),
     }
 
 
@@ -65,7 +71,7 @@ def queue_candidates(store, account_id, thread_ids):
         if result:
             trigger, messages = result
             queued += store.enqueue(
-                account_id, thread_id, trigger["id"], context_for(trigger, messages)
+                account_id, thread_id, trigger["id"], context_for(trigger, messages, account_id)
             )
     return queued
 
@@ -82,7 +88,24 @@ def reconcile(store, account_id):
             if "SENT" in m["labels"] and m["internal_date"] >= draft["published_at"]
         ]
         if sent:
-            store.set_state(draft["id"], "sent", sent_message_id=sent[0]["id"], last_error=None)
+            indexed_draft = draft["gmail_draft_id"] in store.draft_ids(
+                account_id, draft["thread_id"]
+            )
+            surviving_draft = any("DRAFT" in m["labels"] for m in messages)
+            if indexed_draft and not surviving_draft:
+                # A send can race the cycle's draft listing. Wait for the next
+                # index rather than misclassifying the newer thread snapshot.
+                continue
+            if draft["state"] == "publishing" or surviving_draft:
+                # A separate reply is not evidence that this suggestion was used.
+                # Preserve the remote draft: it may contain the person's edits.
+                store.set_state(
+                    draft["id"],
+                    "superseded",
+                    last_error="Separate reply observed; inspect any remaining Gmail draft",
+                )
+            else:
+                store.set_state(draft["id"], "sent", sent_message_id=sent[0]["id"], last_error=None)
             closed += 1
         elif (
             draft["state"] == "published"
@@ -94,12 +117,13 @@ def reconcile(store, account_id):
     return closed
 
 
-def _refresh(store, client, account_id, thread_id):
-    drafts = client.list_drafts()
+def _refresh(store, client, account_id, thread_id, *, refresh_drafts=False):
+    drafts = client.list_drafts() if refresh_drafts else None
     messages = client.get_thread(thread_id)
     with store.db:
         store.replace_thread(account_id, thread_id, messages)
-        store.set_draft_index(account_id, drafts)
+        if drafts is not None:
+            store.set_draft_index(account_id, drafts)
 
 
 def recover_publishing(store, client, account_id):
@@ -115,10 +139,9 @@ def recover_publishing(store, client, account_id):
                 if error.status == 404:
                     continue  # The person may have sent or discarded it since listing.
                 raise
-            if (
-                message["thread_id"] == row["thread_id"]
-                and message["body_text"].strip() == row["generated_text"].strip()
-            ):
+            if message["thread_id"] == row["thread_id"] and comparable_body(
+                message["body_text"]
+            ) == comparable_body(row["generated_text"]):
                 matches.append(draft_id)
         with store.db:
             if len(matches) == 1:
@@ -141,8 +164,11 @@ def _preflight(store, client, account_id, draft_id):
             queue_candidates(store, account_id, {row["thread_id"]})
             return None
         trigger, messages = current
-        context = context_for(trigger, messages)
-        if context != json.loads(row["context"]):
+        context = context_for(trigger, messages, account_id)
+        saved = json.loads(row["context"])
+        if "adapter_name" in saved:
+            context["adapter_name"] = saved["adapter_name"]
+        if context != saved:
             store.set_state(
                 draft_id,
                 "queued",
@@ -173,7 +199,8 @@ def process_pending(store, client, account_id, generator, *, limit=20):
                 # Record attempts before model work, which can fail independently of sync.
                 with store.db:
                     store.set_state(draft_id, "queued", attempts=row["attempts"] + 1)
-                text = generator.generate(json.loads(row["context"]))
+                context = {**json.loads(row["context"]), "adapter_name": generator.adapter_name}
+                text = generator.generate(context)
                 if not text.strip():
                     raise ValueError("Model returned an empty draft")
                 with store.db:
@@ -181,6 +208,7 @@ def process_pending(store, client, account_id, generator, *, limit=20):
                         draft_id,
                         "ready",
                         generated_text=text,
+                        context=json.dumps(context),
                         model_version=generator.version,
                         last_error=None,
                     )
@@ -195,6 +223,15 @@ def process_pending(store, client, account_id, generator, *, limit=20):
             with store.db:
                 store.set_state(draft_id, "published", gmail_draft_id=result["id"], last_error=None)
             published += 1
+        except AlreadyRunning:
+            # Training or another account can own the model temporarily. This is
+            # not a failed generation and must not consume the retry budget.
+            row = store.draft(draft_id)
+            with store.db:
+                store.set_state(
+                    draft_id, "queued", attempts=row["attempts"] - 1, last_error="Model is busy"
+                )
+            break
         except PublishUncertain:
             with store.db:
                 store.set_state(draft_id, "publishing", last_error="Unknown publication outcome")
@@ -217,15 +254,21 @@ class LocalGenerator:
         model_path,
         *,
         adapter_path=None,
+        adapter_name=None,
         arm="instruct",
         max_tokens=300,
-        model_lock=Path("data/model.lock"),
+        model_lock=None,
     ):
         self.model_path = Path(model_path).resolve()
         self.adapter_path = Path(adapter_path).resolve() if adapter_path else None
+        self.adapter_name = adapter_name or (
+            self.adapter_path.name if self.adapter_path else "default"
+        )
+        if not re.fullmatch(r"[\w-]+", self.adapter_name):
+            raise ValueError("Use --adapter-name with letters, digits, _ or -")
         self.arm = arm
         self.max_tokens = max_tokens
-        self.model_lock = model_lock
+        self.model_lock = model_lock if model_lock is not None else default_paths()["model_lock"]
         self.model = None
         self.tokenizer = None
         self.stack = ExitStack()
@@ -253,15 +296,21 @@ class LocalGenerator:
                 digest = hashlib.sha256(json.dumps(signature).encode()).hexdigest()[:16]
                 self.version = f"{self.model_path.name}:{self.arm}:{digest}"
             except BaseException:
-                self.stack.close()
-                self.model = None
-                self.tokenizer = None
+                self.close()
                 raise
         from train.draft import draft
-        from train.format import Pair
 
-        return draft(self.model, self.tokenizer, Pair.from_dict(context), self.arm, self.max_tokens)
+        conversation = generation_input(context, self.adapter_name)
+        return draft(self.model, self.tokenizer, conversation, self.arm, self.max_tokens)
 
     def close(self):
+        loaded = self.model is not None
         self.model = self.tokenizer = None
-        self.stack.close()
+        try:
+            if loaded:
+                import mlx.core as mx
+
+                gc.collect()
+                mx.clear_cache()
+        finally:
+            self.stack.close()

@@ -1,5 +1,7 @@
 """Resumable backfill and transactional incremental mailbox synchronization."""
 
+import json
+
 from gmail_agent.client import GmailError
 from gmail_agent.store import now_ms
 
@@ -104,12 +106,20 @@ def sync_mailbox(store, client, account_id):
     drafts = client.list_drafts()
     # Refresh active threads even if a send raced with history pagination.
     affected.update(row["thread_id"] for row in store.active_drafts(account_id))
-    affected.update(d["message"]["threadId"] for d in drafts)
-    affected.update(
-        row[0]
+    previous_drafts = {
+        row[0]: set(json.loads(row[1]))
         for row in store.db.execute(
-            "SELECT thread_id FROM threads WHERE account_id=? AND draft_ids!='[]'", (account_id,)
+            "SELECT thread_id,draft_ids FROM threads WHERE account_id=? AND draft_ids!='[]'",
+            (account_id,),
         )
+    }
+    current_drafts = {}
+    for draft in drafts:
+        current_drafts.setdefault(draft["message"]["threadId"], set()).add(draft["id"])
+    affected.update(
+        thread_id
+        for thread_id in previous_drafts.keys() | current_drafts.keys()
+        if previous_drafts.get(thread_id, set()) != current_drafts.get(thread_id, set())
     )
     threads = {thread_id: client.get_thread(thread_id) for thread_id in sorted(affected)}
     if was_backfilling or store.account(account_id)["needs_reconcile"]:
