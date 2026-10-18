@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -60,6 +61,28 @@ def main():
         assert not app_home.exists()
         assert call("status") == []
         assert (app_home / "data/mail.db").stat().st_mode & 0o777 == 0o600
+        # Exercise the additional command namespace from the relocated executable.
+        # The fixture is synthetic and never touches a provider or Keychain token.
+        with sqlite3.connect(app_home / "data/mail.db") as db:
+            db.execute(
+                "INSERT INTO accounts(account_id,email,credential_ref,activated_at) VALUES (?,?,?,?)",
+                ("demo@example.com", "demo@example.com", "synthetic", 0),
+            )
+            db.execute(
+                "INSERT INTO threads(account_id,thread_id) VALUES (?,?)",
+                ("demo@example.com", "test-thread"),
+            )
+            db.execute(
+                """INSERT INTO messages(account_id,message_id,thread_id,internal_date,labels,headers,body_text)
+                   VALUES (?,?,?,?,?,?,?)""",
+                ("demo@example.com", "test-message", "test-thread", 1,
+                 '["SENT"]', '{"from":"demo@example.com"}', "Synthetic reply"),
+            )
+        export = app_home / "data/messages.jsonl"
+        exported = call("messages", "--source", "gmail", "--account", "demo@example.com",
+                        "export", "--output", str(export))
+        assert exported["messages"] == 1
+        assert json.loads(export.read_text())["source"] == "gmail"
         arguments = ["self-check"]
         if args.model:
             arguments.extend(["--model", str(args.model.resolve()), "--arm", args.arm])

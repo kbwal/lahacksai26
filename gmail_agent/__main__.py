@@ -47,6 +47,10 @@ def parser():
     result.add_argument("--db", type=Path, default=paths["db"])
     result.add_argument("--account", help="Connected Gmail address; optional with one account")
     commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser(
+        "messages", add_help=False,
+        help="Slack/Discord ingestion and unified exports; use messages --help",
+    )
     commands.add_parser("info", help="Show the app interface version and default paths")
     check = commands.add_parser("self-check", help="Check the runtime without contacting Gmail")
     worker_options(check)
@@ -149,7 +153,18 @@ def recover(store, client, account_id, args):
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # One bundled executable, independent provider stores and command namespaces.
+    if argv and argv[0] == "messages":
+        from message_pipeline.__main__ import main as messages_main
+
+        return messages_main(argv[1:])
+    command_parser = parser()
+    args, extra = command_parser.parse_known_args(argv)
+    if args.command == "messages":
+        command_parser.error("Place messages first, followed by its --db, --source and account options")
+    if extra:
+        command_parser.error(f"unrecognized arguments: {' '.join(extra)}")
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     store = None

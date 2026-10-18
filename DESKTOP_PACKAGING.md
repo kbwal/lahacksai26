@@ -99,3 +99,22 @@ PyInstaller builds are platform-specific. This package targets arm64 macOS; a su
 The default output is **ad hoc signed for local development**, not a notarized consumer application. `APPLE_SIGNING_IDENTITY` can supply a Developer ID identity to the build. When embedding the worker, sign the nested libraries/helper and enclosing app in the application's release pipeline, notarize the finished distribution, and test installation and Keychain prompts on a clean Mac. Preserve a stable signing identity across updates. A sandboxed/Mac App Store app needs a separately validated helper, data-container and Keychain entitlement design; this first package targets direct macOS distribution. [PyInstaller macOS signing](https://pyinstaller.org/en/stable/feature-notes.html#macos-binary-code-signing).
 
 The development Google OAuth project is still in Testing. Its token lifetime and allowed test users apply to this binary too. Public Gmail access requires the OAuth configuration and verification described in [GMAIL_SETUP.md](GMAIL_SETUP.md). Packaging does not change Gmail permissions or enable automatic sending.
+
+## Additional message sources
+
+The same executable exposes `messages --help` for Slack/Discord ingestion and unified
+message exports. For example, `lahacks-mail-worker messages --source slack --account U123
+--workspace T123 run --suggest-replies` emits one JSON status object per cycle and defaults to a 30-minute
+interval. The app should supervise this process separately from the Gmail drafting process.
+It uses `data/messages.db` under the same app home and a separate Keychain service.
+No extra runtime dependency or model process is needed for ingestion. Optional suggestions
+use the bundled MLX runtime and the shared model lock. The `messages ... suggestions`
+command supplies generated text and observed human replies to the app's review/copy UI.
+
+See [MESSAGE_PIPELINE.md](MESSAGE_PIPELINE.md) for the message contract, channel selection,
+credentials, source labels, provider limits, and outstanding OAuth UI work. The local
+archive has been rebuilt with this command: 144 automated tests passed, relocation and
+private-data exclusion checks passed, and the relocated executable generated both Slack
+and Discord suggestions from synthetic context using Qwen3.5-2B on Metal. No live Slack
+or Discord account was accessed. The build discovers MLX's dynamic parsers/templates
+from wheel metadata so packaging does not depend on GPU access during module discovery.
