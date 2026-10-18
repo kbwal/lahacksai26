@@ -7,9 +7,10 @@ import os
 import sys
 from contextlib import redirect_stdout
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from gmail_agent import runtime
-from gmail_agent.locking import AlreadyRunning, process_lock, worker_lock
+from gmail_agent.locking import AlreadyRunning, worker_lock
 from gmail_agent.store import Store
 
 
@@ -188,12 +189,13 @@ def main(argv=None):
         if args.command == "connect":
             from gmail_agent.auth import connect
 
-            with process_lock(store.path.with_suffix(".worker.lock")):
-                # Third-party OAuth instructions must not corrupt the app's JSON stdout.
-                with redirect_stdout(sys.stderr):
-                    email = connect(args.client_secrets)
-                with store.db:
-                    store.add_account(email, email)
+            # Third-party OAuth instructions must not corrupt the app's JSON stdout.
+            with redirect_stdout(sys.stderr):
+                email = connect(
+                    args.client_secrets, db_path=store.path, expected_account=args.account
+                )
+            with store.db:
+                store.add_account(email, email)
             print(json.dumps({"account": email, "connected": True}))
             return 0
         account_id = select_account(store, args.account)
@@ -202,9 +204,15 @@ def main(argv=None):
             return 0
         if args.command == "export-feedback":
             args.output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with args.output.open("x", encoding="utf-8") as target:
+            with NamedTemporaryFile(
+                "w", encoding="utf-8", dir=args.output.parent, prefix=".feedback-"
+            ) as target:
                 for item in store.feedback(account_id):
                     target.write(json.dumps(item, ensure_ascii=False) + "\n")
+                target.flush()
+                # A hard link publishes the completed file atomically without
+                # overwriting an existing output, even if another writer raced us.
+                os.link(target.name, args.output)
             print(json.dumps({"output": str(args.output)}))
             return 0
         if args.command == "disconnect":

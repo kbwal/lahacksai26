@@ -2,6 +2,7 @@
 
 import json
 import logging
+import random
 import signal
 import threading
 import time
@@ -18,7 +19,7 @@ def run_cycle(store, client, account_id, generator, *, limit=20):
         store.start_cycle(account_id)
     try:
         result = sync_mailbox(store, client, account_id)
-        result["published"] = process_pending(store, client, account_id, generator, limit=limit)
+        result.update(process_pending(store, client, account_id, generator, limit=limit))
     except Exception as error:
         with store.db:
             store.finish_cycle(account_id, error)
@@ -34,13 +35,20 @@ def run_forever(store, client, account_id, generator, *, interval=1800, limit=20
     stop = stop or threading.Event()
     while not stop.is_set():
         started = time.monotonic()
+        model_busy = False
         try:
             result = run_cycle(store, client, account_id, generator, limit=limit)
+            model_busy = result["model_busy"]
             log.info("Cycle complete: %s", json.dumps(result, sort_keys=True))
         except Exception as error:  # noqa: BLE001 -- a failed cycle must not terminate the daemon
             # Provider errors can contain sensitive request data. Log only the class.
             log.error("Cycle failed (%s); retained cursor and queued work", type(error).__name__)
-        stop.wait(max(1, interval - (time.monotonic() - started)))
+        delay = max(1, interval - (time.monotonic() - started))
+        if model_busy:
+            # Jitter breaks the shared login schedule so one account cannot
+            # repeatedly lose the model lock to the same worker every cycle.
+            delay = min(delay, random.uniform(60, 300))
+        stop.wait(delay)
 
 
 def run_locked(store, client, account_id, generator, *, once=False, interval=1800, limit=20):

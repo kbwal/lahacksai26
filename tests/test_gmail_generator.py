@@ -1,12 +1,14 @@
-import importlib
+import runpy
 import sys
 import weakref
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from gmail_agent.locking import AlreadyRunning, process_lock
 from gmail_agent.replies import LocalGenerator
+from gmail_agent.runtime import default_paths
 
 
 @pytest.fixture
@@ -92,10 +94,14 @@ def test_generation_error_can_release_lock_and_retry(model_runtime):
 
 
 @pytest.mark.parametrize("command", ["draft", "trainer"])
-@pytest.mark.parametrize("override_lock", [False, True])
-def test_training_commands_obey_shared_lock(tmp_path, monkeypatch, command, override_lock):
-    monkeypatch.setenv("LAHACKS_MAIL_HOME", str(tmp_path))
-    lock = tmp_path / ("override.lock" if override_lock else "data/model.lock")
+@pytest.mark.parametrize("isolated_home", [False, True])
+def test_training_commands_obey_shared_lock(tmp_path, monkeypatch, command, isolated_home):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    if isolated_home:
+        monkeypatch.setenv("LAHACKS_MAIL_HOME", str(tmp_path / "isolated"))
+    else:
+        monkeypatch.delenv("LAHACKS_MAIL_HOME", raising=False)
+    lock = default_paths()["model_lock"]
     called = []
 
     def load(*_args, **_kwargs):
@@ -118,28 +124,22 @@ def test_training_commands_obey_shared_lock(tmp_path, monkeypatch, command, over
         sys.modules, "mlx_lm.tuner.utils", SimpleNamespace(linear_to_lora_layers=None)
     )
     monkeypatch.setitem(sys.modules, "mlx_lm.utils", SimpleNamespace(save_config=None))
-    # Import the real CLI while replacing only native model libraries.
+    # Exercise __main__ as python -m does, replacing only native model libraries.
     monkeypatch.delitem(sys.modules, f"train.{command}", raising=False)
-    module = importlib.import_module(f"train.{command}")
     argv = [command, "--model", "/unused", "--arm", "base"]
     if command == "draft":
         argv.extend(["--pairs", "/unused"])
     else:
         argv.extend(["--train", "/unused", "--adapter-path", "/unused"])
-    if override_lock:
-        argv.extend(["--model-lock", str(lock)])
     monkeypatch.setattr(sys, "argv", argv)
-    try:
-        with process_lock(lock), pytest.raises(AlreadyRunning):
-            module.main()
-        assert not called
-        with pytest.raises(ValueError, match="stop after checking lock"):
-            module.main()
-        assert called == [True]
-        with process_lock(lock):
-            pass
-    finally:
-        sys.modules.pop(f"train.{command}", None)
+    with process_lock(lock), pytest.raises(AlreadyRunning):
+        runpy.run_module(f"train.{command}", run_name="__main__")
+    assert not called
+    with pytest.raises(ValueError, match="stop after checking lock"):
+        runpy.run_module(f"train.{command}", run_name="__main__")
+    assert called == [True]
+    with process_lock(lock):
+        pass
 
 
 def test_generation_matches_installed_training_prompt_contract(tmp_path, monkeypatch):

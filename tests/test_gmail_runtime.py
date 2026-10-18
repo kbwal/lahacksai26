@@ -61,7 +61,7 @@ def test_info_is_json_and_never_opens_a_database_or_keychain(tmp_path, monkeypat
 
 
 def test_connect_keeps_library_instructions_off_json_stdout(tmp_path, monkeypatch, capsys):
-    def connect(_):
+    def connect(_, **_kwargs):
         print("Opening Google sign-in")
         return "me@example.com"
 
