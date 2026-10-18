@@ -3,15 +3,15 @@
   font-size: 14px;
   line-height: 1.5;
   color-scheme: light dark;
-  --bg: light-dark(#f8f7f3, #1d1e1b);
-  --surface: light-dark(#fffefa, #232420);
-  --rail: light-dark(#f0efe9, #20211e);
-  --text: light-dark(#30342e, #ecece3);
-  --sub: light-dark(#6c7067, #acafa3);
-  --border: light-dark(#e3e4da, #3b3e35);
-  --tint: light-dark(#e6ebe2, #333c30);
-  --accent: light-dark(#4b654c, #bdd1ae);
-  --on-accent: light-dark(#fffefa, #253021);
+  --bg: light-dark(#fafafa, #191919);
+  --surface: light-dark(#ffffff, #202020);
+  --rail: light-dark(#f3f3f3, #1c1c1c);
+  --text: light-dark(#202020, #f0f0f0);
+  --sub: light-dark(#696969, #a8a8a8);
+  --border: light-dark(#e2e2e2, #383838);
+  --tint: light-dark(#e9e9e9, #303030);
+  --accent: light-dark(#292929, #e3e3e3);
+  --on-accent: light-dark(#ffffff, #202020);
   --warning: light-dark(#835b28, #e3bc80);
   --error: light-dark(#9d3030, #f6b4b4);
   --serif:
@@ -644,7 +644,7 @@ input[type="checkbox"] {
   overflow: auto;
 }
 .modal::backdrop {
-  background: light-dark(#272a2466, #0d0e0ba6);
+  background: light-dark(#1b1b1b66, #080808a6);
   backdrop-filter: blur(3px);
 }
 .modal-content {

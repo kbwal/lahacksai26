@@ -31,7 +31,7 @@ function createWindow() {
     minWidth: 740,
     minHeight: 600,
     title: "Margin",
-    backgroundColor: "#f7f8f4",
+    backgroundColor: "#fafafa",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       nodeIntegration: false,
