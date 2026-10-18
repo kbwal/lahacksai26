@@ -297,4 +297,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from gmail_agent.locking import process_lock
+    from gmail_agent.runtime import default_paths
+
+    with process_lock(default_paths()["model_lock"]):
+        main()
