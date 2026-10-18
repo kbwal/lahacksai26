@@ -16,9 +16,8 @@ Mail Companion.app/
 ~/Library/Application Support/lahacksai26/
   data/mail.db                   # Gmail history, pending drafts, sync/feedback state
   data/model.lock                # shared by inference and training
-  models/Qwen3.5-2B/             # installed separately, reusable across app updates
-  models/Qwen3.5-2B-Base/        # optional experimental/training arm
-  adapters/                     # user-specific adapters
+  models/Qwen3-4B-Base/          # installed separately, reusable across app updates
+  adapters/<persona>/           # one trained LoRA per persona, loaded by persona id
   credentials/                  # app-provided Desktop OAuth client configuration
 
 macOS Keychain                  # per-account access and refresh tokens
@@ -78,11 +77,11 @@ Run the repeatable archive test with a local model:
 ```bash
 build/macos-venv/bin/python scripts/smoke_macos.py \
   dist/lahacks-mail-worker-macos-arm64.zip \
-  --model models/Qwen3.5-2B \
+  --model models/Qwen3-4B-Base \
   --model-lock "$HOME/Library/Application Support/lahacksai26/data/model.lock"
 ```
 
-It unpacks into a temporary directory, removes Python environment paths, limits PATH to system binaries, creates an isolated app data home, verifies the executable signature and JSON contract, checks exclusion of private data/weights, and runs a synthetic generation through the actual bundled runtime. It never connects to the mailbox. Omit `--model` for a faster runtime check, or use `--arm base --model models/Qwen3.5-2B-Base` to test the base arm. A held model lock makes the check fail safely; wait for or stop the active generator first.
+It unpacks into a temporary directory, removes Python environment paths, limits PATH to system binaries, creates an isolated app data home, verifies the executable signature and JSON contract, checks exclusion of private data/weights, and runs a synthetic generation through the actual bundled runtime. It never connects to the mailbox. Omit `--model` for a faster runtime check, or add `--adapter-path adapters/<persona>` to also load a trained adapter. A held model lock makes the check fail safely; wait for or stop the active generator first.
 
 PyInstaller builds are platform-specific. This package targets arm64 macOS; a successful build on the current machine is not proof of compatibility with every macOS version. `build-info.json` records the build OS and exact dependency versions. Validate on the oldest macOS version the application intends to support before declaring that minimum.
 

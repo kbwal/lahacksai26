@@ -1,5 +1,6 @@
 import json
 from argparse import Namespace
+from pathlib import Path
 
 from train import veri
 from train.format import ME, THEM, Conversation, Edit, Message
@@ -125,3 +126,37 @@ def test_submit_uploads_then_creates_on_the_dataset_id(monkeypatch):
         ["veri", "datasets", "upload", "sft.jsonl", "--name", "base-social-sft", "--quiet"],
         ["veri", "jobs", "create", "sft.toml", "--dataset", "id1", "--quiet"],
     ]
+
+
+def test_fetch_installs_finished_lora_beside_its_veri_files(tmp_path, monkeypatch):
+    import mlx.core as mx
+
+    root = tmp_path / "adapters"
+    jobs = root / "social" / "veri" / "jobs.json"
+    jobs.parent.mkdir(parents=True)
+    jobs.write_text(json.dumps({"sft": "job-1"}))
+    (root / "professional" / "veri").mkdir(parents=True)
+    (root / "professional" / "veri" / "jobs.json").write_text(json.dumps({"sft": "job-2"}))
+
+    def download(*argv):
+        assert argv[:3] == ("jobs", "download", "job-1")
+        peft = Path(argv[4]) / "job-1" / "final"
+        peft.mkdir(parents=True)
+        (peft / "adapter_config.json").write_text(json.dumps({"r": 4, "lora_alpha": 8}))
+        key = "base_model.model.model.layers.0.self_attn.q_proj.lora_{}.weight"
+        mx.save_safetensors(str(peft / "adapter_model.safetensors"), {
+            key.format("A"): mx.zeros((4, 8)), key.format("B"): mx.zeros((8, 4)),
+        })
+        return ""
+
+    monkeypatch.setattr(veri.shutil, "which", lambda _: "/bin/veri")
+    monkeypatch.setattr(veri, "job_status", lambda job: "completed" if job == "job-1" else "running")
+    monkeypatch.setattr(veri, "_veri", download)
+    assert veri.fetch(root, "models/Qwen3-4B-Base", "base") == ["social"]
+
+    config = json.loads((root / "social" / "adapter_config.json").read_text())
+    assert (config["arm"], config["model"], config["adapter_name"]) == ("base", "models/Qwen3-4B-Base", "social")
+    assert config["lora_parameters"]["keys"] == ["model.layers.0.self_attn.q_proj"]
+    assert (root / "social" / "adapters.safetensors").is_file()
+    assert jobs.is_file() and not list((root / "social").glob(".incoming-*"))
+    assert not (root / "professional" / "adapters.safetensors").exists()

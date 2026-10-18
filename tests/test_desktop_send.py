@@ -77,6 +77,24 @@ def test_inbox_uses_current_gmail_text_and_preserves_delivery_identity(setup):
     assert draft["delivery"]["generationId"] == request["generationId"]
 
 
+
+def test_inbox_fits_the_apps_limits_for_long_mail_and_addresses(tmp_path):
+    store = Store(tmp_path / "mail.db")
+    account = ("a" * 90) + "@example.com"
+    with store.db:
+        store.add_account(account, account)
+        store.ensure_thread(account, "thread")
+        store.enqueue(account, "thread", "trigger", {"conversation": [{"text": "x" * 20000}]})
+        row = store.active_drafts(account)[0]
+        store.set_state(row["id"], "published", gmail_draft_id="remote-draft", published_at=1)
+    try:
+        draft = inbox(store, Client(), account)["drafts"][0]
+        assert len(draft["id"]) <= 100
+        assert len(draft["context"]) == 10000
+        assert draft["roleId"] == "professional"
+    finally:
+        store.close()
+
 @pytest.mark.parametrize(
     "body",
     [

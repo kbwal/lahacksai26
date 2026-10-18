@@ -25,12 +25,20 @@ DPO has to start from the SFT result, which doesn't exist until the SFT job ends
 So when a run has both, only SFT is submitted. Once it finishes, run again with
 `--veri-stages dpo --veri-dpo-base <SFT result>` (e.g. a Hugging Face repo the SFT
 job pushed its merged model to).
+
+When the jobs finish, `fetch` downloads each adapter's newest finished LoRA,
+converts it to mlx-lm (train/peft_to_mlx.py) and installs it as
+<adapter-root>/<adapter_name>, where the worker and desktop app load it:
+
+    uv run python -m train.veri fetch --adapter-root adapters --model models/Qwen3-4B-Base --arm base
 """
 
+import argparse
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 import tomllib
 from dataclasses import replace
 from pathlib import Path
@@ -160,7 +168,7 @@ def run(args, names: list[str], convs: dict, edits: dict, tokenizer):
     if args.resume_root or args.replay_frac is not None:
         raise SystemExit("--backend veri trains from scratch: --resume-root and --replay-frac are mlx only")
     if Path(args.model).is_dir() and not args.veri_base_model:
-        raise SystemExit("--backend veri needs --veri-base-model (the Hugging Face id of --model, e.g. Qwen/Qwen3-1.7B-Base)")
+        raise SystemExit("--backend veri needs --veri-base-model (the Hugging Face id of --model, e.g. Qwen/Qwen3-4B-Base)")
     if args.veri_submit and not shutil.which("veri"):
         raise SystemExit("--veri-submit needs the veri CLI: uv tool install 'veri-sdk[mcp]', then veri login")
     base = args.veri_base_model or args.model
@@ -196,3 +204,69 @@ def run(args, names: list[str], convs: dict, edits: dict, tokenizer):
             path = out / "jobs.json"
             old = json.loads(path.read_text()) if path.exists() else {}
             path.write_text(json.dumps(old | jobs, indent=2) + "\n")
+
+
+def job_status(job_id: str) -> str:
+    out = subprocess.run(["veri", "jobs", "get", job_id, "--json"], capture_output=True, text=True, check=False)
+    if out.returncode:
+        raise RuntimeError(f"veri jobs get {job_id} failed:\n{out.stderr or out.stdout}")
+    return json.loads(out.stdout)["status"]
+
+
+def peft_dir(checkpoint: Path) -> Path:
+    """The directory in a downloaded checkpoint that holds the PEFT adapter."""
+    found = sorted(p.parent for p in checkpoint.rglob("adapter_config.json") if (p.parent / "adapter_model.safetensors").is_file())
+    if not found:
+        raise SystemExit(f"{checkpoint} has no LoRA adapter (a merged model can't be installed as an adapter)")
+    return found[0]
+
+
+def install(peft: Path, adapter_dir: Path, model: str, arm: str, name: str):
+    """Convert `peft` and swap it into `adapter_dir`, weights first, so a reader never
+    pairs new weights with an older config for longer than one rename."""
+    from train.peft_to_mlx import convert
+
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=adapter_dir, prefix=".incoming-") as tmp:
+        convert(peft, Path(tmp), model, arm, name)
+        for f in ("adapters.safetensors", "adapter_config.json"):
+            os.replace(Path(tmp) / f, adapter_dir / f)
+
+
+def fetch(adapter_root: Path, model: str, arm: str, names: list[str] | None = None) -> list[str]:
+    """Install every finished job's adapter; returns the adapter names installed."""
+    if not shutil.which("veri"):
+        raise SystemExit("fetch needs the veri CLI: uv tool install 'veri-sdk[mcp]', then veri login")
+    installed = []
+    for jobs_file in sorted(adapter_root.glob("*/veri/jobs.json")):
+        name = jobs_file.parent.parent.name
+        if names and name not in names:
+            continue
+        jobs = json.loads(jobs_file.read_text())
+        stage = "dpo" if "dpo" in jobs else "sft"  # DPO starts from SFT, so it is newer
+        status = job_status(jobs[stage])
+        if status != "completed":
+            print(f"{name}: {stage} job {jobs[stage]} is {status}")
+            continue
+        download = jobs_file.parent / "download"
+        _veri("jobs", "download", jobs[stage], "--output-dir", str(download))
+        install(peft_dir(download / jobs[stage]), adapter_root / name, model, arm, name)
+        installed.append(name)
+    return installed
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Install finished Veri adapters for local drafting")
+    commands = ap.add_subparsers(dest="command", required=True)
+    f = commands.add_parser("fetch", help="download, convert and install finished adapters")
+    f.add_argument("--adapter-root", type=Path, required=True, help="the --adapter-root the jobs were prepared in")
+    f.add_argument("--model", required=True, help="the local copy of the base model the jobs trained")
+    f.add_argument("--arm", required=True, choices=("base", "instruct"))
+    f.add_argument("--adapter-names", nargs="+", help="only these adapters (default: every one with jobs)")
+    args = ap.parse_args()
+    installed = fetch(args.adapter_root, args.model, args.arm, args.adapter_names)
+    print(f"installed: {', '.join(installed) or 'none yet'}")
+
+
+if __name__ == "__main__":
+    main()

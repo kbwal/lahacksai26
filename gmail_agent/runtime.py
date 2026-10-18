@@ -27,7 +27,9 @@ def default_paths():
     return {
         "home": home,
         "db": home / "data" / "mail.db",
-        "model": home / "models" / "Qwen3.5-2B",
+        "model": home / "models" / "Qwen3-4B-Base",
+        # One trained LoRA per persona: <adapters>/<persona>.
+        "adapters": home / "adapters",
         # Development and bundled processes share Metal even with different cwd's.
         "model_lock": (home if configured else app_home) / "data" / "model.lock",
     }
@@ -74,6 +76,7 @@ def self_check(args):
         generator = LocalGenerator(
             args.model,
             adapter_path=args.adapter_path,
+            adapter_root=args.adapter_root,
             adapter_name=args.adapter_name,
             arm=args.arm,
             max_tokens=args.max_tokens,

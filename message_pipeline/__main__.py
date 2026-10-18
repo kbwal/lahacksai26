@@ -132,6 +132,7 @@ def suggest_replies(store, args, key):
     generator = LocalGenerator(
         args.model,
         adapter_path=args.adapter_path,
+        adapter_root=args.adapter_root,
         adapter_name=args.adapter_name,
         arm=args.arm,
         max_tokens=args.max_tokens,

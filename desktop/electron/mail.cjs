@@ -3,10 +3,11 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { existsSync } = require("node:fs");
 
-function runWorker(executable, args, input) {
+function runWorker(executable, args, input, cwd) {
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       shell: false,
+      cwd,
       stdio: ["pipe", "pipe", "pipe"],
     });
     let output = "",
@@ -68,9 +69,10 @@ function runSidecar(app, args, input) {
     : path.join(root, "build", "macos-venv", "bin", "python");
   if (!existsSync(executable))
     throw new Error("The local worker is not installed. Build the mail sidecar first.");
-  return runWorker(executable, app.isPackaged ? args : [
+  // A development worker resolves models/ and adapters/ against the checkout.
+  return app.isPackaged ? runWorker(executable, args, input) : runWorker(executable, [
     path.join(root, "desktop", "electron", "mail-entry.py"), ...args,
-  ], input);
+  ], input, root);
 }
 
 function createWorkerClient(app) {

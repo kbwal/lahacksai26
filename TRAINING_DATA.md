@@ -7,10 +7,31 @@ Use the existing authenticated import from [GMAIL_SETUP.md](GMAIL_SETUP.md), the
 uv run python -m pipeline.gmail --db data/mail.db \
   --adapter-name professional --output data/training/gmail
 
-uv run python -m train.trainer --model models/Qwen3-1.7B \
-  --arm instruct --data data/training/gmail/conversations.jsonl \
-  --edits data/training/gmail/edits.jsonl --adapter-root adapters/instruct
+uv run python -m train.trainer --model models/Qwen3-4B-Base \
+  --arm base --data data/training/gmail/conversations.jsonl \
+  --edits data/training/gmail/edits.jsonl --adapter-root adapters
 ```
+
+Each persona's adapter lands in `adapters/<persona>`, which is where the worker and
+the desktop app look for it by persona id (`professional`, `social`, ...).
+
+### Training on Veri (demo day)
+
+Until local overnight runs are practical, train the same data on Veri GPUs. This
+uploads the training text, so only use data you're allowed to send off the machine:
+
+```sh
+uv run python -m train.trainer --backend veri --model models/Qwen3-4B-Base \
+  --veri-base-model Qwen/Qwen3-4B-Base --arm base \
+  --data data/training/gmail/conversations.jsonl \
+  --edits data/training/gmail/edits.jsonl --adapter-root adapters --veri-submit
+
+# When the jobs finish: download, convert to mlx and install as adapters/<persona>.
+uv run python -m train.veri fetch --adapter-root adapters --model models/Qwen3-4B-Base --arm base
+```
+
+`fetch` reports jobs that are still running and can be rerun. Drop `--veri-submit`
+to only write the datasets and print the cost estimate commands.
 
 Add `--account you@example.com` if the database contains multiple accounts.
 The output directory must be new; existing exports are never overwritten.
@@ -54,7 +75,7 @@ No bootstrap data was needed. This establishes the data handoff, not sufficient
 data or model quality for a trained persona. Model weights and actual training
 quality are separate from export validation.
 
-The project recommends Qwen3-1.7B for fine-tuning; the existing desktop defaults
-to Qwen3.5-2B for generation. Always load an adapter with the exact base model used
-to train it. The optional Veri submission path uploads text and bills GPU time;
+Training and drafting both default to Qwen3-4B-Base. The worker refuses an adapter
+whose `adapter_config.json` names a different base model, and takes the prompt
+format (`arm`) from it. The optional Veri submission path uploads text and bills GPU time;
 the local workflow above does neither.

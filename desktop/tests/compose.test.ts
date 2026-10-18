@@ -23,7 +23,7 @@ describe('local new-message generation boundary', () => {
       const {writeFile}=await import('node:fs/promises');
       await writeFile(path.join(dir,'compose-model.json'),JSON.stringify({path:dir}));
       expect(await handlers['compose:generate']({},request)).toEqual({body:'A new message with [LINK].'});
-      expect(worker).toHaveBeenCalledWith('desktop-compose',undefined,expect.objectContaining({persona:'Professional',description:workspace.roles[0].description,modelPath:dir}));
+      expect(worker).toHaveBeenCalledWith('desktop-compose',undefined,expect.objectContaining({persona:'Professional',personaId:'professional',description:workspace.roles[0].description,modelPath:dir}));
       await handlers['compose:generate']({}, {...request, appId: 'discord'});
       expect(worker).toHaveBeenLastCalledWith('desktop-compose',undefined,expect.objectContaining({appId:'discord'}));
       await expect(handlers['compose:generate']({},{...request,prompt:'x'.repeat(6001)})).rejects.toThrow('Invalid prompt');

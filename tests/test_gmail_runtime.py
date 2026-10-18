@@ -16,7 +16,7 @@ def test_bundled_defaults_are_outside_installation_and_working_directory(tmp_pat
     args = parser().parse_args(["run"])
     home = tmp_path / "Library/Application Support/lahacksai26"
     assert args.db == home / "data/mail.db"
-    assert args.model == home / "models/Qwen3.5-2B"
+    assert args.model == home / "models/Qwen3-4B-Base"
     assert args.model_lock == home / "data/model.lock"
     assert not home.exists()
 
@@ -26,7 +26,7 @@ def test_app_can_select_an_isolated_home_and_override_individual_paths(tmp_path,
     monkeypatch.setenv("LAHACKS_MAIL_HOME", str(home))
     args = parser().parse_args(["--db", str(tmp_path / "existing.db"), "run"])
     assert args.db == tmp_path / "existing.db"
-    assert args.model == home / "models/Qwen3.5-2B"
+    assert args.model == home / "models/Qwen3-4B-Base"
     assert args.model_lock == home / "data/model.lock"
     monkeypatch.setenv("LAHACKS_MAIL_HOME", "relative")
     with pytest.raises(SystemExit) as error:

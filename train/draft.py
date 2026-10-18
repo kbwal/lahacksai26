@@ -2,12 +2,12 @@
 
 Against held-out data (drafts each test conversation's last "me" message from what came before it):
 
-    uv run python -m train.draft --model models/Qwen3-1.7B-Base --arm base \\
+    uv run python -m train.draft --model models/Qwen3-4B-Base --arm base \\
         --adapter-path adapters/base/social --data data/conversations.jsonl
 
 A new message from a request:
 
-    uv run python -m train.draft --model models/Qwen3-1.7B-Base --arm base \\
+    uv run python -m train.draft --model models/Qwen3-4B-Base --arm base \\
         --adapter-path adapters/base/social --prompt "ask sarah to get dinner on tuesday"
 """
 
@@ -20,10 +20,16 @@ from mlx_lm import generate, load
 
 from train.format import ARMS, ME, SOURCES, Conversation, cut_turn, prompt_ids
 
+# The trainer's default --max-seq-length: drafting never sees a longer context than training did.
+MAX_CONTEXT = 2048
+
 
 def draft(model, tokenizer, c: Conversation, arm: str, max_tokens: int = 300) -> str:
-    """The next "me" message after `c`."""
-    return cut_turn(generate(model, tokenizer, prompt=prompt_ids(tokenizer, c, arm), max_tokens=max_tokens), arm)
+    """The next "me" message after `c`, from as many of its newest messages as fit."""
+    prompt = prompt_ids(tokenizer, c, arm, max(MAX_CONTEXT - max_tokens, 1))
+    if prompt is None:
+        raise ValueError("The latest message is too long to draft a reply to")
+    return cut_turn(generate(model, tokenizer, prompt=prompt, max_tokens=max_tokens), arm)
 
 
 def main():

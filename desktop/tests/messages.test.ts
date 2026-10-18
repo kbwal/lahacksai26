@@ -7,7 +7,7 @@ const { registerMessages } = createRequire(import.meta.url)("../electron/message
 const directories: string[] = [];
 afterEach(async () => { for (const dir of directories.splice(0)) await rm(dir, {recursive: true, force: true}); });
 
-async function harness() {
+async function harness(getWorkspace?: () => Promise<unknown>) {
   const dir = await mkdtemp(path.join(tmpdir(), "margin-messages-"));
   directories.push(dir);
   const handlers: Record<string, Function> = {};
@@ -17,7 +17,7 @@ async function harness() {
   const trusted = vi.fn();
   registerMessages({app: {getPath: () => dir, isPackaged: false}, ipcMain: {
     handle: (name: string, handler: Function) => { handlers[name] = handler; },
-  }, dialog, trusted, getWindow: () => null, worker});
+  }, dialog, trusted, getWindow: () => null, getWorkspace, worker});
   return {dir, handlers, worker, dialog, trusted};
 }
 
@@ -55,6 +55,14 @@ describe("native chat boundary", () => {
     expect(sync.slice(-8)).toEqual(["sync", "--max-pages", "5", "--suggest-replies", "--draft-limit", "3", "--model", h.dir]);
     expect(h.worker.mock.calls.at(-1)![0].at(-1)).toBe("inbox");
     expect(h.worker.mock.calls.every(([args]) => !args.some(arg => arg.includes("send")))).toBe(true);
+  });
+  it("drafts with the first persona allowed for the source, so its adapter loads", async () => {
+    const h = await harness(async () => ({roles: [
+      {id: "professional", excludedApps: ["slack"]}, {id: "social", excludedApps: []},
+    ]}));
+    await writeFile(path.join(h.dir, "compose-model.json"), JSON.stringify({path: h.dir}));
+    await h.handlers["messages:sync"]({}, "slack", "U1", "T1");
+    expect(h.worker.mock.calls[1][0].slice(-3)).toEqual([h.dir, "--persona", "social"]);
   });
   it("cancels model selection without syncing or overwriting the inbox", async () => {
     const h = await harness();

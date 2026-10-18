@@ -4,6 +4,8 @@ Companion to [PROJECT.md](PROJECT.md). Target machine: Apple M2, 16 GB unified m
 
 ## 1. Model
 
+> **Current default (Oct 18, 2026):** `Qwen/Qwen3-4B-Base`, base arm, for training and serving. With no time for overnight local runs before the demo, adapters are trained on Veri GPUs (`train.trainer --backend veri`, then `train.veri fetch`; see [TRAINING_DATA.md](TRAINING_DATA.md)). Local mlx training remains the intended path. The 1.7B analysis below is kept for the local Train now budget.
+
 - **Base arm:** `Qwen/Qwen3-1.7B-Base`. **Instruct arm:** `Qwen/Qwen3-1.7B`.
   - The instruct model was post-trained from the base model, so the only difference between the arms is instruction tuning.
   - They share a tokenizer, so held-out loss can be compared directly between them.
@@ -105,8 +107,7 @@ The Gmail worker is implemented on the `infra` branch. Follow [GMAIL_SETUP.md](G
 
 ```bash
 uv sync                          # Python 3.12 (MLX lags behind the system 3.15)
-hf download Qwen/Qwen3-1.7B-Base --local-dir models/Qwen3-1.7B-Base
-hf download Qwen/Qwen3-1.7B --local-dir models/Qwen3-1.7B
+hf download Qwen/Qwen3-4B-Base --local-dir models/Qwen3-4B-Base
 ```
 
 ## 8. Open questions

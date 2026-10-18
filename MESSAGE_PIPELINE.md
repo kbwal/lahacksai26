@@ -174,11 +174,11 @@ permissions if a scan unexpectedly returns no messages.
 ```bash
 # Sync, then draft for new incoming messages in the selected conversations.
 uv run python -m gmail_agent messages --source slack --account U123 --workspace T123 \
-  run --suggest-replies --model models/Qwen3.5-2B
+  run --suggest-replies --model models/Qwen3-4B-Base --persona professional
 
 # Explicitly draft for one cached thread, including historical conversations.
 uv run python -m gmail_agent messages --source slack --account U123 --workspace T123 \
-  suggest --channel C123 --thread 1792240000.000001 --model models/Qwen3.5-2B
+  suggest --channel C123 --thread 1792240000.000001 --model models/Qwen3-4B-Base
 
 # JSON for the app's review/copy interface; includes generated text and context.
 uv run python -m gmail_agent messages --source slack --account U123 --workspace T123 suggestions

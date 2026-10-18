@@ -189,7 +189,7 @@ def test_generation_matches_installed_training_prompt_contract(tmp_path, monkeyp
 
 
 def test_adapter_persona_defaults_to_directory_and_can_be_overridden(tmp_path):
-    assert LocalGenerator(tmp_path).adapter_name == "default"
+    assert LocalGenerator(tmp_path).adapter_name == "professional"
     assert LocalGenerator(tmp_path, adapter_path=tmp_path / "social").adapter_name == "social"
     assert (
         LocalGenerator(
@@ -199,3 +199,71 @@ def test_adapter_persona_defaults_to_directory_and_can_be_overridden(tmp_path):
     )
     with pytest.raises(ValueError, match="--adapter-name"):
         LocalGenerator(tmp_path, adapter_path=tmp_path / "version 2")
+
+
+def adapter(root, name, **config):
+    import json
+
+    path = root / name
+    path.mkdir(parents=True)
+    (path / "adapters.safetensors").write_bytes(b"")
+    (path / "adapter_config.json").write_text(json.dumps(config))
+    return path
+
+
+def test_arm_and_base_model_come_from_the_adapter(tmp_path):
+    model = tmp_path / "Qwen3-4B-Base"
+    social = adapter(tmp_path / "adapters", "social", arm="base", model="models/Qwen3-4B-Base")
+    generator = LocalGenerator(model, adapter_path=social)
+    assert (generator.arm, generator.adapter_name) == ("base", "social")
+    with pytest.raises(ValueError, match="trained with --arm base"):
+        LocalGenerator(model, adapter_path=social, arm="instruct")
+    with pytest.raises(ValueError, match="trained on Qwen3-4B-Base, not Qwen3-1.7B"):
+        LocalGenerator(tmp_path / "Qwen3-1.7B", adapter_path=social)
+
+
+def test_arm_without_an_adapter_follows_the_model_name(tmp_path):
+    assert LocalGenerator(tmp_path / "Qwen3-4B-Base").arm == "base"
+    assert LocalGenerator(tmp_path / "Qwen3-1.7B").arm == "instruct"
+    assert LocalGenerator(tmp_path / "Qwen3-1.7B", arm="base").arm == "base"
+
+
+def test_persona_loads_its_adapter_from_the_root_when_trained(tmp_path):
+    root = tmp_path / "adapters"
+    adapter(root, "social", arm="base")
+    trained = LocalGenerator(tmp_path / "m", adapter_root=root, adapter_name="social")
+    assert trained.adapter_path == (root / "social").resolve()
+    untrained = LocalGenerator(tmp_path / "m", adapter_root=root, adapter_name="professional")
+    assert (untrained.adapter_path, untrained.adapter_name) == (None, "professional")
+    with pytest.raises(ValueError, match="--adapter-name"):
+        LocalGenerator(tmp_path / "m", adapter_root=root, adapter_name="../social")
+
+
+def test_drafting_context_is_cleaned_like_training_data():
+    from gmail_agent.replies import context_for
+
+    messages = [
+        {
+            "id": "list",
+            "headers": {"from": "news@example.com", "list-unsubscribe": "<mailto:x>"},
+            "labels": ["INBOX"],
+            "body_text": "Newsletter",
+        },
+        {
+            "id": "sent",
+            "headers": {"from": "me@example.com"},
+            "labels": ["SENT"],
+            "body_text": "Are you free?\n-- \nMe, Inc.",
+        },
+        {
+            "id": "incoming",
+            "headers": {"from": "friend@example.com"},
+            "labels": ["INBOX"],
+            "body_text": "Yes!\n\nOn Mon, Me wrote:\n> Are you free?",
+        },
+    ]
+    conversation = context_for(messages[-1], messages, "me@example.com")["conversation"]
+    assert conversation == [
+        {"from": "me", "text": "Are you free?"},
+        {"from": "them", "text": "Yes!"},
+    ]
